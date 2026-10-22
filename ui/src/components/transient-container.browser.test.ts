@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import { item, mountMenu, openMenu, surface } from "../test-helpers/solid-menu.tsx";
+import { item, mountMenu, openMenu, surface as menuSurface } from "../test-helpers/solid-menu.tsx";
 import "./modal-dialog.tsx";
 import { mountNativeLinkMenu } from "./native-link-menu.runtime.ts";
 import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
@@ -116,7 +116,7 @@ describe.runIf("__vitest_browser__" in globalThis)("native menu clipboard fallba
     const copied = vi.fn();
     vi.spyOn(navigator.clipboard, "writeText").mockRejectedValue(new Error("Permission denied"));
     const exec = vi.spyOn(document, "execCommand").mockImplementation(() => {
-      expect(surface().contains(document.activeElement)).toBe(true);
+      expect(menuSurface().contains(document.activeElement)).toBe(true);
       return false;
     });
     const view = mountMenu({
@@ -132,9 +132,9 @@ describe.runIf("__vitest_browser__" in globalThis)("native menu clipboard fallba
     await page.getByRole("menuitem", { name: "Copy link" }).click();
     await expect.poll(() => copied.mock.calls).toEqual([[false]]);
     expect(exec).toHaveBeenCalledOnce();
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
     expect(view.handle.overlay.open).toBe(true);
   });
 });
