@@ -1,8 +1,17 @@
 import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, createSignal, onSettled } from "solid-js";
-import { TERMINAL_UPLOAD_RETENTION_MS } from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import {
+  MAX_TERMINAL_UPLOAD_BYTES,
+  TERMINAL_UPLOAD_RETENTION_MS,
+} from "../../../../packages/gateway-protocol/src/schema/terminal-constants.js";
+import type {
+  TerminalUploadPathStyle,
+  TerminalUploadResult,
+} from "../../../../packages/gateway-protocol/src/schema/terminal.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
+import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import {
@@ -10,11 +19,6 @@ import {
   uploadsDisabledMessage,
 } from "../../lib/uploads.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
-import {
-  encodeTerminalUpload,
-  quoteTerminalUploadPath,
-  uploadTerminalFile,
-} from "./terminal-file-upload.ts";
 
 type TerminalUploadTab = {
   gatewaySessionId: string;
@@ -49,6 +53,53 @@ type TerminalUploadBatch = {
   retryable: boolean;
   abortController: AbortController;
 };
+
+function quotePosixUploadPath(filePath: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/u.test(filePath)) {
+    return filePath;
+  }
+  return `'${filePath.replaceAll("'", "'\\''")}'`;
+}
+
+/** Uses the admitted receiver's path contract, keeping shell checks intact. */
+function quoteTerminalUploadPath(
+  filePath: string,
+  shell: string,
+  uploadPathStyle?: TerminalUploadPathStyle,
+): string {
+  if (uploadPathStyle === "native") {
+    if (containsAsciiControlCharacter(filePath)) {
+      throw new Error(t("terminal.uploadInvalidNativePath"));
+    }
+    if (/^(?:[a-z]:[\\/]|\\\\)/iu.test(filePath)) {
+      if (filePath.includes('"')) {
+        throw new Error(t("terminal.uploadInvalidNativePath"));
+      }
+      // Native CLI parsers recognize Windows paths before POSIX unescaping.
+      return `"${filePath}"`;
+    }
+    if (!filePath.startsWith("/")) {
+      throw new Error(t("terminal.uploadInvalidNativePath"));
+    }
+    // Native path readers remove outer quotes and backslash escapes, not shell quote concatenation.
+    return `"${filePath.replace(/[\\"$`]/gu, "\\$&")}"`;
+  }
+  const shellName = shell.split(/[\\/]/u).pop()?.toLowerCase() ?? "";
+  if (/^(?:pwsh|powershell)(?:\.exe)?$/u.test(shellName)) {
+    return `'${filePath.replaceAll("'", "''")}'`;
+  }
+  if (/^cmd(?:\.exe)?$/u.test(shellName)) {
+    if (/[%!]/u.test(filePath)) {
+      throw new Error(t("terminal.uploadUnsafeCmdPath"));
+    }
+    return `"${filePath.replaceAll('"', '""')}"`;
+  }
+  const posixShell = /^(?:(?:ba|da|a|k|z)?sh|fish)(?:\.exe)?$/u.test(shellName);
+  if (!posixShell) {
+    throw new Error(t("terminal.uploadUnsupportedShell", { shell: shellName || shell }));
+  }
+  return quotePosixUploadPath(filePath);
+}
 
 function isRetryableUploadError(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "retryable" in error) {
@@ -215,7 +266,10 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
       }
       let contentBase64: string;
       try {
-        contentBase64 = await encodeTerminalUpload(file);
+        if (file.size > MAX_TERMINAL_UPLOAD_BYTES) {
+          throw new Error(t("terminal.uploadTooLarge", { file: file.name }));
+        }
+        contentBase64 = bytesToBase64(new Uint8Array(await file.arrayBuffer()));
       } catch (error) {
         if (signal.aborted) {
           return;
@@ -227,14 +281,13 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
         return;
       }
 
-      let uploaded: Awaited<ReturnType<typeof uploadTerminalFile>>;
+      let uploaded: TerminalUploadResult;
       const uploadStartedAtMs = Date.now();
       try {
-        uploaded = await uploadTerminalFile(
-          client,
-          batch.tab.gatewaySessionId,
-          { name: file.name, contentBase64 },
-          signal,
+        uploaded = await client.request<TerminalUploadResult>(
+          "terminal.upload",
+          { sessionId: batch.tab.gatewaySessionId, name: file.name, contentBase64 },
+          { signal },
         );
         if (signal.aborted || !ensureCurrent(batch)) {
           return;
