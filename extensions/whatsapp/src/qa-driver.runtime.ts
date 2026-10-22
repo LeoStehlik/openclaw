@@ -171,6 +171,28 @@ function readPoll(
   };
 }
 
+function readMedia(message: proto.IMessage | null | undefined):
+  | {
+      fileName?: string;
+      mediaType?: string;
+    }
+  | undefined {
+  const media = findMessageSection(message ?? undefined, [
+    "imageMessage",
+    "videoMessage",
+    "ptvMessage",
+    "audioMessage",
+    "documentMessage",
+    "stickerMessage",
+  ]);
+  return media
+    ? {
+        fileName: normalizeOptionalString(media.value.fileName),
+        mediaType: resolveInboundMediaMimetype({ [media.name]: media.value } as proto.IMessage),
+      }
+    : undefined;
+}
+
 function readQuotedMessage(message: WAMessage): WhatsAppQaDriverQuotedMessage | undefined {
   const contextInfo = extractContextInfo(message.message ?? undefined);
   const replyContext = describeReplyContext(message.message ?? undefined);
@@ -185,6 +207,64 @@ function readQuotedMessage(message: WAMessage): WhatsAppQaDriverQuotedMessage | 
     participant: replyContext?.sender?.jid ?? contextInfo?.participant ?? undefined,
     text: replyContext?.body,
   };
+}
+
+function normalizeObservedMessage(
+  message: WAMessage,
+  authDir: string,
+): WhatsAppQaDriverObservedMessage | null {
+  if (message.key.fromMe) {
+    return null;
+  }
+  const extractedText = extractText(message.message ?? undefined);
+  const location = extractLocationData(message.message ?? undefined);
+  const locationText = location ? formatLocationText(location) : undefined;
+  const text = [extractedText, locationText].filter(Boolean).join("\n").trim() || undefined;
+  const reaction = readReaction(message.message);
+  const poll = readPoll(message.message);
+  const media = readMedia(message.message);
+  const quoted = readQuotedMessage(message);
+  const kind: WhatsAppQaDriverObservedMessageKind = reaction
+    ? "reaction"
+    : poll
+      ? "poll"
+      : media
+        ? "media"
+        : location
+          ? "location"
+          : text
+            ? "text"
+            : "unknown";
+  if (!text && kind === "unknown") {
+    return null;
+  }
+  const fromJid = message.key.remoteJid ?? undefined;
+  const senderJid =
+    fromJid && isWhatsAppGroupJid(fromJid) ? (message.key.participant ?? fromJid) : fromJid;
+  const participantJid = message.key.participant ?? undefined;
+  return {
+    fromJid,
+    fromPhoneE164: senderJid ? jidToE164(senderJid, { authDir }) : null,
+    hasMedia: media ? true : undefined,
+    kind,
+    mediaFileName: media?.fileName,
+    mediaType: media?.mediaType,
+    messageId: message.key.id ?? undefined,
+    observedAt: new Date().toISOString(),
+    ...(participantJid ? { participantJid } : {}),
+    poll,
+    quoted,
+    reaction,
+    text: text ?? "",
+  };
+}
+
+function createConnectionClosedError(update: ConnectionUpdateEvent) {
+  const reason = update.lastDisconnect?.error;
+  const status = getStatusCode(reason);
+  const details = reason ? `: ${formatError(reason)}` : "";
+  const statusLabel = typeof status === "number" ? ` (status ${status})` : "";
+  return new Error(`WhatsApp QA driver connection closed${statusLabel}${details}`);
 }
 
 export async function startWhatsAppQaDriverSession(params: {
@@ -218,75 +298,22 @@ export async function startWhatsAppQaDriverSession(params: {
     }
   };
 
+  const observe = (message: WhatsAppQaDriverObservedMessage) => {
+    observedMessages.push(message);
+    for (const waiter of waiters) {
+      if (!waiter.predicate(message)) {
+        continue;
+      }
+      removeWaiter(waiter);
+      waiter.resolve(message);
+    }
+  };
+
   const onMessagesUpsert = (event: MessageUpsertEvent) => {
-    for (const message of event.messages ?? []) {
-      const authDir = params.authDir;
-      if (message.key.fromMe) {
-        continue;
-      }
-      const extractedText = extractText(message.message ?? undefined);
-      const location = extractLocationData(message.message ?? undefined);
-      const locationText = location ? formatLocationText(location) : undefined;
-      const text = [extractedText, locationText].filter(Boolean).join("\n").trim() || undefined;
-      const reaction = readReaction(message.message);
-      const poll = readPoll(message.message);
-      const section = findMessageSection(message.message ?? undefined, [
-        "imageMessage",
-        "videoMessage",
-        "ptvMessage",
-        "audioMessage",
-        "documentMessage",
-        "stickerMessage",
-      ]);
-      const media = section
-        ? {
-            fileName: normalizeOptionalString(section.value.fileName),
-            mediaType: resolveInboundMediaMimetype({
-              [section.name]: section.value,
-            } as proto.IMessage),
-          }
-        : undefined;
-      const quoted = readQuotedMessage(message);
-      const kind: WhatsAppQaDriverObservedMessageKind = reaction
-        ? "reaction"
-        : poll
-          ? "poll"
-          : media
-            ? "media"
-            : location
-              ? "location"
-              : text
-                ? "text"
-                : "unknown";
-      if (!text && kind === "unknown") {
-        continue;
-      }
-      const fromJid = message.key.remoteJid ?? undefined;
-      const senderJid =
-        fromJid && isWhatsAppGroupJid(fromJid) ? (message.key.participant ?? fromJid) : fromJid;
-      const participantJid = message.key.participant ?? undefined;
-      const observed: WhatsAppQaDriverObservedMessage = {
-        fromJid,
-        fromPhoneE164: senderJid ? jidToE164(senderJid, { authDir }) : null,
-        hasMedia: media ? true : undefined,
-        kind,
-        mediaFileName: media?.fileName,
-        mediaType: media?.mediaType,
-        messageId: message.key.id ?? undefined,
-        observedAt: new Date().toISOString(),
-        ...(participantJid ? { participantJid } : {}),
-        poll,
-        quoted,
-        reaction,
-        text: text ?? "",
-      };
-      observedMessages.push(observed);
-      for (const waiter of waiters) {
-        if (!waiter.predicate(observed)) {
-          continue;
-        }
-        removeWaiter(waiter);
-        waiter.resolve(observed);
+    for (const rawMessage of event.messages ?? []) {
+      const observed = normalizeObservedMessage(rawMessage, params.authDir);
+      if (observed) {
+        observe(observed);
       }
     }
   };
@@ -297,13 +324,7 @@ export async function startWhatsAppQaDriverSession(params: {
       settlePendingNotifications();
     }
     if (event.connection === "close") {
-      const reason = event.lastDisconnect?.error;
-      const status = getStatusCode(reason);
-      const details = reason ? `: ${formatError(reason)}` : "";
-      const statusLabel = typeof status === "number" ? ` (status ${status})` : "";
-      closeSessionResources(
-        new Error(`WhatsApp QA driver connection closed${statusLabel}${details}`),
-      );
+      closeSessionResources(createConnectionClosedError(event));
     }
   };
 

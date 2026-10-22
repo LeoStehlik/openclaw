@@ -8,22 +8,22 @@ import {
 } from "./terminal-connection.ts";
 import { disposeTerminalController } from "./terminal-controller-lifecycle.ts";
 import {
+  adoptTerminalPanelSession,
   bootTerminalPanelSession,
   captureTerminalDeliveryError,
   createTerminalSessionBootOperations,
 } from "./terminal-panel-session-boot.ts";
 import { TerminalPanelSessionRecovery } from "./terminal-panel-session-recovery.ts";
 import { focusTerminalSession } from "./terminal-panel-session-rendering.ts";
-import {
-  shellBasename,
-  type TerminalOperation,
-  type TerminalPanelError,
-  type TerminalPanelSessionHost,
-  type TerminalPanelSessionState,
-  type TerminalPanelSessionTab,
-  type TerminalRestoreBatch,
-  type TerminalSessionListOptions,
-  type TerminalStagedInput,
+import type {
+  TerminalOperation,
+  TerminalPanelError,
+  TerminalPanelSessionHost,
+  TerminalPanelSessionState,
+  TerminalPanelSessionTab,
+  TerminalRestoreBatch,
+  TerminalSessionListOptions,
+  TerminalStagedInput,
 } from "./terminal-panel-session-types.ts";
 import { createTerminalIntentQueue, terminalIntentQueue } from "./terminal-pending-actions.ts";
 import type { TerminalIntentHost } from "./terminal-pending-actions.ts";
@@ -200,31 +200,14 @@ export function createTerminalPanelSessions(host: TerminalPanelSessionHost) {
   ): void {
     const reportDeliveryError = captureDeliveryError(tab);
     recovery.retireTab(tab);
-    const connection = ownedConnection;
-    delete tab.cancelPendingIntent;
-    tab.gatewaySessionId = result.sessionId;
-    tab.shellName = result.title ?? shellBasename(result.shell);
-    tab.shell = result.shell;
-    tab.agentId = result.agentId;
-    tab.cwd = result.cwd;
-    tab.agentOwned = result.owner !== undefined ? result.owner.startsWith("agent:") : agentOwned;
-    // Libterminal observes layout before the Gateway session exists. Resync the
-    // current grid now so a resize during the open/attach RPC is not lost.
-    const pendingInput = tab.pendingInput.drain();
-    if (tab.status !== "exited") {
-      const { cols, rows } = tab.controller.terminal;
-      void connection?.resize(result.sessionId, cols || 80, rows || 24).catch(reportDeliveryError);
-      for (const data of pendingInput) {
-        void connection?.input(result.sessionId, data).catch(reportDeliveryError);
-      }
-    }
-    if (tab.status === "connecting") {
-      if (tab.awaitFirstOutput) {
-        ownedReadiness.arm(tab);
-      } else {
-        ownedReadiness.markReady(tab);
-      }
-    }
+    adoptTerminalPanelSession({
+      tab,
+      result,
+      agentOwned,
+      connection: ownedConnection,
+      readiness: ownedReadiness,
+      onDeliveryError: reportDeliveryError,
+    });
     updateState({ tabs: [...state.tabs] });
     recovery.persist();
   }

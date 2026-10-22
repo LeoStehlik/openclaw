@@ -1,5 +1,3 @@
-import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { detectMime } from "@openclaw/media-core/mime";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
@@ -12,11 +10,9 @@ import {
   listMusicGenerationProviders,
   listVideoGenerationProviders,
 } from "../../media-generation/registry.js";
-import { isVoiceMessageCompatibleAudio } from "../../media/audio.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "../../shared/lazy-runtime.js";
@@ -35,21 +31,10 @@ import { createRuntimeAgent } from "./runtime-agent.js";
 import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
+import { createRuntimeMedia } from "./runtime-media.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
-const loadWebMedia = createLazyRuntimeMethod(
-  () => import("../../media/web-media.js"),
-  (runtime) => runtime.loadWebMedia,
-);
-const getImageMetadata = createLazyRuntimeMethod(
-  () => import("../../media/image-ops.js"),
-  (runtime) => runtime.getImageMetadata,
-);
-const resizeToJpeg = createLazyRuntimeMethod(
-  () => import("../../media/image-ops.js"),
-  (runtime) => runtime.resizeToJpeg,
-);
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/runtime-api.js"));
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
@@ -340,14 +325,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
     sandbox: createRuntimeSandbox(agent),
     worktrees: createRuntimeWorktrees(),
     system: base.system,
-    media: {
-      loadWebMedia,
-      detectMime,
-      mediaKindFromMime,
-      isVoiceCompatibleAudio: isVoiceMessageCompatibleAudio,
-      getImageMetadata,
-      resizeToJpeg,
-    },
+    media: createRuntimeMedia(),
     webSearch: {
       listProviders: (params) => {
         warnPluginSdkDeprecation({

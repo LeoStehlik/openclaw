@@ -7,6 +7,7 @@ import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceScorecardJson,
   type QaEvidenceSummaryEntry,
+  type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
 import { qaProfileEvidencePlan, type QaProfileEvidencePlan } from "./profile-evidence-plan.js";
 import type {
@@ -62,25 +63,19 @@ function featureCounts(
   return fulfillmentCounts(features.length, fulfilled, partial);
 }
 
-export async function attachQaProfileScorecardEvidenceToFile(params: {
-  evidencePath: string;
-  evidenceMode?: QaScorecardEvidenceMode;
-  profile: string;
+function buildQaProfileScorecardEvidence(params: {
+  evidence: QaEvidenceSummaryJson;
   profilePlan: QaProfileEvidencePlan;
   filters: QaProfileScorecardFilters;
   categories: readonly QaScorecardCategoryCoverageReport[];
-}) {
-  const evidence = validateQaEvidenceSummaryJson(
-    JSON.parse(await fs.readFile(params.evidencePath, "utf8")),
-  );
-  const { profilePlan, filters, categories } = params;
+}): QaEvidenceScorecardJson {
   const containment =
-    evidence.schemaVersion === 3
-      ? resolveQaEvidenceContainment(evidence.occurrences, evidence.entries)
+    params.evidence.schemaVersion === 3
+      ? resolveQaEvidenceContainment(params.evidence.occurrences, params.evidence.entries)
       : undefined;
   // Coverage is a qualifying projection; raw rows keep their captured roles and
   // object identity for history, binding validation and gallery selection.
-  const entries = getEffectiveQaEvidenceEntries(evidence).map((entry) =>
+  const entries = getEffectiveQaEvidenceEntries(params.evidence).map((entry) =>
     containment && "binding" in entry
       ? Object.assign({}, entry, {
           coverage: containment.projectCoverage(entry.binding.occurrenceId, entry.coverage),
@@ -90,13 +85,16 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
   // Only passing primary evidence fulfills coverage; secondary evidence remains diagnostic.
   const passingEntries = entries.filter((entry) => entry.result.status === "pass");
   const primaryCoverageIds = coverageIdsForRole(passingEntries, "primary");
-  for (const requirement of qaProfileEvidencePlan.evaluateProof(profilePlan, evidence)) {
+  for (const requirement of qaProfileEvidencePlan.evaluateProof(
+    params.profilePlan,
+    params.evidence,
+  )) {
     if (requirement.obligation === "required" && !requirement.qualified) {
       primaryCoverageIds.delete(requirement.coverageId);
     }
   }
   const secondaryCoverageIds = coverageIdsForRole(entries, "secondary");
-  const categoryReports = categories.map(
+  const categoryReports = params.categories.map(
     (category): QaEvidenceScorecardJson["categoryReports"][number] => {
       const coverageIds = normalizeSortedUniqueTrimmedStringList(category.coverageIds);
       const fulfilledCoverageIdCount = coverageIds.filter((coverageId) =>
@@ -132,7 +130,7 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
     },
   );
   const profileCoverageIds = normalizeSortedUniqueTrimmedStringList(
-    categories.flatMap((category) => category.coverageIds),
+    params.categories.flatMap((category) => category.coverageIds),
   );
   const coverageIdCount = profileCoverageIds.length;
   const fulfilledCoverageIdCount = profileCoverageIds.filter((coverageId) =>
@@ -144,11 +142,11 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
   const partialCategoryCount = categoryReports.filter(
     (category) => category.status === "partial",
   ).length;
-  const profileFeatures = categories.flatMap((category) => category.features);
-  const scorecard: QaEvidenceScorecardJson = {
+  const profileFeatures = params.categories.flatMap((category) => category.features);
+  return {
     filters: {
-      surface: filters.surface?.trim() || null,
-      category: filters.category?.trim() || null,
+      surface: params.filters.surface?.trim() || null,
+      category: params.filters.category?.trim() || null,
     },
     run: {
       evidenceEntryCount: entries.length,
@@ -162,6 +160,25 @@ export async function attachQaProfileScorecardEvidenceToFile(params: {
     coverageIds: fulfillmentCounts(coverageIdCount, fulfilledCoverageIdCount),
     categoryReports,
   };
+}
+
+export async function attachQaProfileScorecardEvidenceToFile(params: {
+  evidencePath: string;
+  evidenceMode?: QaScorecardEvidenceMode;
+  profile: string;
+  profilePlan: QaProfileEvidencePlan;
+  filters: QaProfileScorecardFilters;
+  categories: readonly QaScorecardCategoryCoverageReport[];
+}) {
+  const evidence = validateQaEvidenceSummaryJson(
+    JSON.parse(await fs.readFile(params.evidencePath, "utf8")),
+  );
+  const scorecard = buildQaProfileScorecardEvidence({
+    evidence,
+    profilePlan: params.profilePlan,
+    filters: params.filters,
+    categories: params.categories,
+  });
   const nextEvidence = attachQaEvidenceScorecard({
     summary: evidence,
     evidenceMode: params.evidenceMode,

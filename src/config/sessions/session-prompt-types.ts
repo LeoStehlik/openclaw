@@ -22,7 +22,7 @@ export type SessionSkillSnapshot = {
    * each SKILL.md body) so the embedded runner can skip a workspace skill
    * scan within a turn. Persistence projections strip it before committing
    * session state. On a cold session resume this is undefined and
-   * src/agents/embedded-agent-runner/skills-prompt.ts rebuilds it from disk.
+   * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
   /** Runtime-only model-discoverable catalog before prompt budgeting; never persisted. */

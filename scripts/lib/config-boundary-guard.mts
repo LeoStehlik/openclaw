@@ -23,11 +23,13 @@ const COMPAT_CONFIG_API_FILES = new Set([
   "src/plugins/contracts/config-boundary-guard.test.ts",
   "src/plugins/contracts/deprecated-internal-config-api.test.ts",
   "src/plugins/runtime/runtime-config.test.ts",
+  "src/plugins/runtime/runtime-config.ts",
   "src/plugins/runtime/types-core.ts",
 ]);
 
 const AMBIENT_RUNTIME_LOAD_CONFIG_COMPAT_FILES = new Set([
   "src/plugins/runtime/load-context.ts",
+  "src/plugins/runtime/runtime-config.ts",
   "src/plugins/runtime/runtime-plugin-boundary.ts",
 ]);
 
