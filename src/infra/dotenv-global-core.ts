@@ -19,7 +19,7 @@ type DotEnvEntry = {
   value: string;
 };
 
-export type LoadedDotEnvFile = {
+type LoadedDotEnvFile = {
   filePath: string;
   entries: DotEnvEntry[];
 };
@@ -34,7 +34,7 @@ export type GlobalRuntimeDotEnvOptions = {
   onWarning?: DotEnvWarning;
 };
 
-export type ReadDotEnvFileOptions = {
+type ReadDotEnvFileOptions = {
   entryFilter?: (key: string, value: string) => boolean;
   filePath: string;
 };
