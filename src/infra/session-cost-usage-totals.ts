@@ -16,24 +16,6 @@ export function createEmptyCostUsageTotals(): CostUsageTotals {
   };
 }
 
-export function cloneCostUsageTotals(totals: CostUsageTotals): CostUsageTotals {
-  return {
-    ...(totals.usageReport ? { usageReport: { ...totals.usageReport } } : {}),
-    input: totals.input,
-    output: totals.output,
-    cacheRead: totals.cacheRead,
-    cacheWrite: totals.cacheWrite,
-    totalTokens: totals.totalTokens,
-    totalCost: totals.totalCost,
-    inputCost: totals.inputCost,
-    outputCost: totals.outputCost,
-    cacheReadCost: totals.cacheReadCost,
-    cacheWriteCost: totals.cacheWriteCost,
-    missingCostEntries: totals.missingCostEntries,
-    ...(totals.missingCostByModel ? { missingCostByModel: { ...totals.missingCostByModel } } : {}),
-  };
-}
-
 export function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTotals): void {
   if (source.usageReport?.state === "unavailable") {
     target.usageReport = { state: "unavailable" };

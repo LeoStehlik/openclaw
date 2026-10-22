@@ -1,9 +1,5 @@
 import { usageDailyModelIdentity, usageModelIdentity } from "../shared/usage-aggregates.js";
-import {
-  addCostUsageTotals,
-  cloneCostUsageTotals,
-  createEmptyCostUsageTotals,
-} from "./session-cost-usage-totals.js";
+import { addCostUsageTotals, createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
 import type {
   CostUsageTotals,
   SessionCostSummary,
@@ -456,7 +452,13 @@ export function createSessionCostSummaryAccumulator(
       current.tokens += row.tokens;
       current.cost += row.cost;
     },
-    { clone: (row) => ({ ...row, ...cloneCostUsageTotals(row) }) },
+    {
+      clone: (row) => ({
+        ...row,
+        ...(row.usageReport ? { usageReport: { ...row.usageReport } } : {}),
+        ...(row.missingCostByModel ? { missingCostByModel: { ...row.missingCostByModel } } : {}),
+      }),
+    },
   );
   const dailyMessageCounts =
     createDatedRowsAccumulator<SessionDailyMessageCounts>(addMessageCounts);
