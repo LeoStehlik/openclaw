@@ -268,6 +268,7 @@ try {
         await controlGatewayProfile(gateway, "cpu", "start", profilePath, { includeWorkers: true });
       }
     }
+    const cpuBefore = observe ? await readGatewayCpuUsage(gateway) : undefined;
     setPhase(i === 0 ? "02.first-turn" : `03.turn-${String(i).padStart(2, "0")}`);
     const turnId = createHash("sha256").update(phase).digest("hex").slice(0, 32);
     const messageId = `sqlmeasure-${i}`;
@@ -277,8 +278,7 @@ try {
     publish("channel-turns.json", messages);
     const reply = `Synthetic channel measurement response ${i}. The Gateway receives this streamed answer from the local mock provider and delivers it to the isolated QA bus.`;
     publish("mock-control.json", { text: reply, chunkDelayMs: 5 });
-    const cpuBefore = observe ? await readGatewayCpuUsage(gateway) : undefined;
-    const start = performance.now();
+    const start = Date.now();
     const cursor = state.getSnapshot().cursor;
     const firstOutbound = state
       .waitForCursorAdvance(cursor, 180000, (snapshot) =>
@@ -286,7 +286,7 @@ try {
           (message) => message.direction === "outbound" && message.replyToId === messageId,
         ),
       )
-      .then(() => performance.now() - start);
+      .then(() => Date.now() - start);
     void firstOutbound.catch(() => {});
     state.addInboundMessage(
       {
@@ -306,7 +306,7 @@ try {
       textIncludes: reply,
       timeoutMs: 180000,
     });
-    const finalOutboundMs = performance.now() - start;
+    const finalOutboundMs = Date.now() - start;
     const firstOutboundMs = await firstOutbound;
     // The poll acknowledgement follows dispatch, preview cleanup and receipt settlement.
     const deadline = Date.now() + 180000;
@@ -319,7 +319,7 @@ try {
       }
       await delay(50);
     }
-    const settledMs = performance.now() - start;
+    const settledMs = Date.now() - start;
     const cpu = cpuBefore
       ? measureGatewayCpuUsage(cpuBefore, await readGatewayCpuUsage(gateway))
       : undefined;
