@@ -34,7 +34,7 @@ import type {
   PreparedChatSessionSharing,
   ChatSessionSharingState,
   ChatSessionSharingOutcome,
-} from "./components/chat-session-sharing.solid.tsx";
+} from "./components/chat-session-sharing-shared.tsx";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
