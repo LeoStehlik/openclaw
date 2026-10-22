@@ -138,15 +138,19 @@ function startMainCallbackMeasurement() {
     after: (id) => finish(id, performance.now()),
   });
   hook.enable();
-  // Measurement begins inside an already-running Promise continuation.
-  starts.set(executionAsyncId(), performance.now());
-  return () => {
-    const now = performance.now();
-    hook.disable();
-    for (const id of starts.keys()) {
-      finish(id, now);
-    }
-    return { count, maxMs };
+  // The already-running continuation has no matching before event. Its direct
+  // work ends when the caller constructs its pending operation, before awaiting.
+  const initialStart = performance.now();
+  return {
+    finishInitialSlice: () => {
+      count++;
+      maxMs = Math.max(maxMs, performance.now() - initialStart);
+    },
+    stop: () => {
+      finish(executionAsyncId(), performance.now());
+      hook.disable();
+      return { count, maxMs };
+    },
   };
 }
 
@@ -697,7 +701,7 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
   diagnostics.subscribe(observe);
   gitDiagnostics.subscribe(observeOperation);
   let stopIntervalDelay: (() => number[]) | undefined;
-  let stopMainCallback: ReturnType<typeof startMainCallbackMeasurement> | undefined;
+  let mainCallbacks: ReturnType<typeof startMainCallbackMeasurement> | undefined;
   try {
     while ((await nextCommand()) === "run") {
       const sample = sequence++;
@@ -775,8 +779,8 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
       const utilization = performance.eventLoopUtilization();
       markGc("heap-start", `workspace-sample-${sample}`);
       const start = performance.now();
-      stopMainCallback = startMainCallbackMeasurement();
-      const results = await Promise.all(
+      mainCallbacks = startMainCallbackMeasurement();
+      const pendingResults = Promise.all(
         Array.from({ length: fixture.concurrency }, async (_, lane) => {
           const root = path.join(fixture.root, `workspace-${lane}`);
           if (inventory) {
@@ -842,12 +846,11 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
                 assert.equal(materialized.entries.length, fixture.size);
                 if (reopening) {
                   const edited = nameAt(0);
-                  await fs.writeFile(path.join(projection.workspaceDir, edited), "restart edit\n");
+                  const editedPath = path.join(projection.workspaceDir, edited);
+                  const editedContent = `${await fs.readFile(editedPath, "utf8")}\nrestart edit\n`;
+                  await fs.writeFile(editedPath, editedContent);
                   await projection.checkpoint();
-                  assert.equal(
-                    await fs.readFile(path.join(root, edited), "utf8"),
-                    "restart edit\n",
-                  );
+                  assert.equal(await fs.readFile(path.join(root, edited), "utf8"), editedContent);
                   const accepted = await checkpointStore.withLocalWorkspaceStore(
                     { worktreeId: id },
                     async (store) => store.get(),
@@ -967,8 +970,10 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
           };
         }),
       );
-      const mainCallback = stopMainCallback();
-      stopMainCallback = undefined;
+      mainCallbacks.finishInitialSlice();
+      const results = await pendingResults;
+      const mainCallback = mainCallbacks.stop();
+      mainCallbacks = undefined;
       const wallMs = performance.now() - start;
       markGc("heap-stop", `workspace-sample-${sample}`);
       const usedCpu = process.cpuUsage(cpu);
@@ -1009,7 +1014,7 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
       process.send?.({ type: "verified", evidence });
     }
   } finally {
-    stopMainCallback?.();
+    mainCallbacks?.stop();
     stopIntervalDelay?.();
     diagnostics.unsubscribe(observe);
     gitDiagnostics.unsubscribe(observeOperation);
