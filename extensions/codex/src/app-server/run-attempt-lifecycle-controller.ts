@@ -83,6 +83,13 @@ export function createCodexAttemptLifecycleController(
       }
       const deliveredFinal =
         state.pendingTerminalDynamicToolRelease?.response.finalSourceReplyDelivered === true;
+      if (deliveredFinal && turnRuntime.steeringQueueRef.current?.hasSubmittedMessages()) {
+        // This reply may answer the input preceding a steer. Native scheduling
+        // must consume and answer the new input before the turn ends; even a
+        // consumption receipt does not prove the model has answered it.
+        state.pendingTerminalDynamicToolRelease = undefined;
+        return;
+      }
       const authored = deliveredFinal ? undefined : resolveAuthoredResponse();
       if (
         !authored &&

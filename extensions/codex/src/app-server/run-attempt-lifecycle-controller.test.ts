@@ -1,6 +1,7 @@
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { interruptCodexTurnAndWaitBestEffort } from "./attempt-client-cleanup.js";
+import { createCodexSteeringQueue } from "./attempt-steering.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import { prepareCodexServerNotification } from "./protocol-validators.js";
 import {
@@ -38,7 +39,7 @@ const rawCall = (callId: string, name = callId, namespace?: string) => ({
 function createTerminalReleaseHarness() {
   const order: string[] = [];
   const notificationHandlers = new Set<(notification: unknown) => void>();
-  const cancel = vi.fn(() => order.push("cancel"));
+
   const request = vi.fn(async (method: string) => {
     order.push(method);
     return {};
@@ -65,6 +66,21 @@ function createTerminalReleaseHarness() {
     addRequestHandler: () => () => undefined,
     addCloseHandler: () => () => undefined,
   };
+  const steeringQueue = createCodexSteeringQueue({
+    client: client as never,
+    ...scope,
+    requestTimeoutMs: 60_000,
+    signal: new AbortController().signal,
+    assertActive: () => {},
+    prepareMessage: async (text) => ({
+      input: [{ type: "text", text, text_elements: [] }],
+      message: { role: "user", content: text, timestamp: 1 },
+    }),
+  });
+  const cancel = vi.fn(() => {
+    order.push("cancel");
+    steeringQueue.cancel();
+  });
   const resources = {
     prompt: {
       turnState: { codexTurnPromptText: "test" },
@@ -93,7 +109,7 @@ function createTerminalReleaseHarness() {
     noteProgress: vi.fn(),
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
-    steeringQueueRef: { current: { cancel } },
+    steeringQueueRef: { current: { ...steeringQueue, cancel } },
     interruptTurn: (turnId: string) =>
       interruptCodexTurnAndWaitBestEffort(client as never, {
         threadId: "thread-1",
@@ -144,6 +160,7 @@ function createTerminalReleaseHarness() {
       await yieldImmediate();
     },
     activeTurnItemIds,
+    steeringQueue,
     cancel,
     sourceReplies,
     completeTurn,
@@ -233,6 +250,43 @@ describe("buildCodexLifecycleTerminalMeta", () => {
 });
 
 describe("Codex terminal dynamic-tool release", () => {
+  it.each(["before", "after"] as const)(
+    "keeps a steered turn alive when consumption is %s the earlier final reply",
+    async (receipt) => {
+      await using h = createTerminalReleaseHarness();
+      const delivery = h.steeringQueue.queue("Answer the second question", { debounceMs: 0 });
+      // Observe the outcome immediately so a base cancellation is not an unhandled rejection.
+      const outcome = delivery.then(
+        () => "consumed",
+        (error: unknown) => error,
+      );
+      await yieldImmediate();
+      const clientId = "openclaw:turn-1:steer:1";
+      if (receipt === "before") {
+        expect(h.steeringQueue.confirmConsumed(clientId)).toBe(true);
+      }
+      h.controller.recordDynamicToolResult(
+        dynamicToolResult("first-answer", {
+          success: true,
+          terminate: true,
+          finalSourceReplyDelivered: true,
+        }),
+      );
+      await yieldImmediate();
+      expect(h.state.completed).toBe(false);
+      expect(h.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+      if (receipt === "after") {
+        expect(h.steeringQueue.confirmConsumed(clientId)).toBe(true);
+      }
+      await expect(outcome).resolves.toBe("consumed");
+      // Repeated idle notifications must not revive the first answer's terminal candidate.
+      h.controller.scheduleTerminalDynamicToolReleaseCheck();
+      await yieldImmediate();
+      expect(h.state.completed).toBe(false);
+      expect(h.cancel).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps native yield cleanup alive after its subscription route is released", async () => {
     const physical = createClientHarness({
       onWrite: (line, send) => {
