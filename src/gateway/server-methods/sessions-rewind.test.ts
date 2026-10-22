@@ -47,9 +47,6 @@ vi.mock("../../auto-reply/reply/queue/drain.js", () => ({
   dropAbortedFollowups: () => {
     throw new Error("Unexpected followup drain");
   },
-  kickFollowupDrainIfIdle: () => {
-    throw new Error("Unexpected followup drain");
-  },
   rememberFollowupDrainCallback: () => {
     throw new Error("Unexpected followup drain");
   },

@@ -30,7 +30,6 @@ vi.mock("../auto-reply/reply/queue/drain.js", () => {
   return {
     clearFollowupDrainCallback: () => {},
     rememberFollowupDrainCallback: unexpectedDrain,
-    kickFollowupDrainIfIdle: unexpectedDrain,
     prepareStaleFollowupDrainRetirement: unexpectedDrain,
     dropAbortedFollowups: unexpectedDrain,
     scheduleFollowupDrain: unexpectedDrain,
