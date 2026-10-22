@@ -81,7 +81,7 @@ export function NewSessionBody(props: NewSessionBodyProps) {
   const avatarPlacement = createMemo(() =>
     resolveChatDefaultAvatarPlacement(
       true,
-      props.pendingMessage && resolveMessageSender(props.pendingMessage.__openclaw)
+      props.pendingMessage && resolveMessageSender(props.pendingMessage["__openclaw"])
         ? props.userId
         : null,
     ),
