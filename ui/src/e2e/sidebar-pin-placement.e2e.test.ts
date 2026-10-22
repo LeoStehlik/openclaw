@@ -1,4 +1,8 @@
 import { expect, it } from "vitest";
+import {
+  CHAT_SNAPSHOT_DB_NAME,
+  SIDEBAR_SNAPSHOT_STORE_NAME,
+} from "../pages/chat/session-snapshot-database.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -76,8 +80,42 @@ suite.define(() => {
       await row.dragTo(rail);
       const shortcut = rail.locator('[data-sidebar-entry="session-rail:' + key + '"]');
       await shortcut.waitFor();
+      await pinned.locator(".sidebar-session-group-toggle").click();
+      await expect
+        .poll(() =>
+          page.evaluate(
+            ({ databaseName, storeName }) =>
+              new Promise<boolean>((resolve, reject) => {
+                const open = indexedDB.open(databaseName);
+                open.addEventListener("error", () =>
+                  reject(open.error ?? new Error("Sidebar snapshot open failed")),
+                );
+                open.addEventListener("success", () => {
+                  const database = open.result;
+                  const transaction = database.transaction(storeName, "readonly");
+                  const request = transaction.objectStore(storeName).getAll();
+                  transaction.addEventListener("complete", () => {
+                    database.close();
+                    resolve(
+                      request.result.some((record) =>
+                        record.model.collapsedSections.includes("pinned"),
+                      ),
+                    );
+                  });
+                  transaction.addEventListener("abort", () => {
+                    database.close();
+                    reject(transaction.error ?? new Error("Sidebar snapshot read failed"));
+                  });
+                });
+              }),
+            { databaseName: CHAT_SNAPSHOT_DB_NAME, storeName: SIDEBAR_SNAPSHOT_STORE_NAME },
+          ),
+        )
+        .toBe(true);
       await page.reload();
       await shortcut.waitFor();
+      await pinned.locator('.sidebar-session-group-toggle[aria-expanded="false"]').waitFor();
+      await pinned.locator(".sidebar-session-group-toggle").click();
       await row.waitFor();
       expect(
         await pinned.locator(`.sidebar-recent-session[data-session-key="${key}"]`).count(),

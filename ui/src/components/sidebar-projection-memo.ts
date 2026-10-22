@@ -10,16 +10,16 @@ import {
   projectSidebarHomeSession,
   type SidebarHomeSession,
 } from "./app-sidebar-agent-session-rows.ts";
+import { isListedInPinnedSection } from "./app-sidebar-personal-navigation.ts";
 import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import {
   buildSidebarSessionNavigationState,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
-import {
-  isListedInPinnedSection,
-  type SidebarSessionProjection,
-  type SidebarVisibleSections,
+import type {
+  SidebarSessionProjection,
+  SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
 import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
 import type {
@@ -169,7 +169,11 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
-        ownerFiltered: host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive,
+        ownerFilter: host.sessionOwnerFilterActive
+          ? "owner"
+          : host.sessionInvolvingMeFilterActive
+            ? "involvingMe"
+            : null,
         visibleSessionLimits: roster ? rosterLimits : host.sessionData.visibleSessionLimits,
         sortMode: host.effectiveSessionSortMode(),
         statusFilter: host.sessionsStatusFilter,

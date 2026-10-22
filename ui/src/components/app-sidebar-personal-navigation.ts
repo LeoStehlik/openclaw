@@ -1,5 +1,9 @@
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  parseSidebarEntry,
+  type NavigationRouteId,
+  type SidebarZoneEntry,
+} from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -87,11 +91,15 @@ export function hidePersonalSidebarCatalog(
 }
 
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */
-export function createSidebarPinnedSessions(host: {
-  readonly isConnected: boolean;
-  readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
-  readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
-}) {
+export function createSidebarPinnedSessions(
+  host: Pick<
+    PersonalNavigationHost,
+    "sessionDataContext" | "findSidebarSessionByKey" | "navigationCatalog"
+  > & {
+    readonly isConnected: boolean;
+    readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
+  },
+) {
   let source: ApplicationContext["sessions"] | undefined;
   let scope: SessionConnectionScope | null = null;
   const requested = new Map<string, "pending" | "settled">();
@@ -163,7 +171,12 @@ export function createSidebarPinnedSessions(host: {
         if (!current()) {
           return;
         }
-        if (!host.isConnected) {
+        // The roster can supply a pin while its lookup waits behind foreground bootstrap.
+        if (
+          !host.isConnected ||
+          host.findSidebarSessionByKey(key) ||
+          host.navigationCatalog.dashboards?.result?.sessions.some((row) => row.key === key)
+        ) {
           requested.delete(key);
           return;
         }
@@ -262,4 +275,49 @@ export function personalSidebarOwnerProjection(
     selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
     self,
   });
+}
+
+/** Archived pins leave Pinned so the archived view can still list them in place. */
+export function isListedInPinnedSection(
+  row: Pick<SidebarRecentSession, "key" | "archived">,
+  pinnedKeys: ReadonlySet<string>,
+): boolean {
+  return pinnedKeys.has(row.key) && row.archived !== true;
+}
+
+export type SidebarPinZone = {
+  entries: readonly SidebarZoneEntry[];
+  sessionRows: ReadonlyMap<string, SidebarRecentSession>;
+};
+
+/** Rendering and selection share archive visibility; saved pins survive restoration. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row && row.archived !== true && !archiveVisibility?.(row.key) ? [row] : [];
+  });
+}
+
+export function sidebarVisibleRowsInOrder(
+  zone: SidebarPinZone,
+  visibleRows: SidebarRecentSession[],
+  host: {
+    readonly collapsedSessionSections: ReadonlySet<string>;
+    readonly sessionDataContext?: {
+      sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
+    };
+  },
+): SidebarRecentSession[] {
+  return host.collapsedSessionSections.has("pinned")
+    ? visibleRows
+    : [
+        ...sidebarPinnedSessionRows(zone, (key) =>
+          host.sessionDataContext?.sessions.archiveVisibility(key),
+        ),
+        ...visibleRows,
+      ];
 }
