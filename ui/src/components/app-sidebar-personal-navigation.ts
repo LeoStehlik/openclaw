@@ -1,9 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import {
-  parseSidebarEntry,
-  type NavigationRouteId,
-  type SidebarZoneEntry,
-} from "../app-navigation.ts";
+import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
@@ -22,6 +18,7 @@ import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.
 import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
+  type SidebarPinZone,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
@@ -276,19 +273,6 @@ export function personalSidebarOwnerProjection(
     self,
   });
 }
-
-/** Archived pins leave Pinned so the archived view can still list them in place. */
-export function isListedInPinnedSection(
-  row: Pick<SidebarRecentSession, "key" | "archived">,
-  pinnedKeys: ReadonlySet<string>,
-): boolean {
-  return pinnedKeys.has(row.key) && row.archived !== true;
-}
-
-export type SidebarPinZone = {
-  entries: readonly SidebarZoneEntry[];
-  sessionRows: ReadonlyMap<string, SidebarRecentSession>;
-};
 
 /** Rendering and selection share archive visibility; saved pins survive restoration. */
 export function sidebarPinnedSessionRows(

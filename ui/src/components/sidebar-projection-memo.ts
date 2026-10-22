@@ -10,7 +10,6 @@ import {
   projectSidebarHomeSession,
   type SidebarHomeSession,
 } from "./app-sidebar-agent-session-rows.ts";
-import { isListedInPinnedSection } from "./app-sidebar-personal-navigation.ts";
 import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import {
@@ -22,11 +21,12 @@ import type {
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
 import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
-import type {
-  SidebarEmptyGroupsMode,
-  SidebarRecentSession,
-  SidebarSessionSortMode,
-  SidebarSessionStatusFilter,
+import {
+  isListedInPinnedSection,
+  type SidebarEmptyGroupsMode,
+  type SidebarRecentSession,
+  type SidebarSessionSortMode,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type {
