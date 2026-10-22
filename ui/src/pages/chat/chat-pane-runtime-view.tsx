@@ -232,7 +232,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       runtime.questionPromptState,
       state && chatGoalOperations(state),
       runtime.activeSessionResources,
-      runtime.transcript,
       runtime.sessionCompanionThreads,
       nativeGatewaysCapability(),
       lazySidebarElements,

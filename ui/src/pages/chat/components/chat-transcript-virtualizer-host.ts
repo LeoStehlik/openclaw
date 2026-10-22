@@ -737,7 +737,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   }
 
   private readonly completeLayout = () => {
-    if (!this.connected) {
+    if (!this.connected || this.virtualizer.scrollElement !== this.scrollElement) {
       return;
     }
     this.messageReveal.complete(
