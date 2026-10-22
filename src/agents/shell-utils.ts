@@ -288,26 +288,16 @@ export function detectRuntimeShell(): string | undefined {
     }
   }
 
-  if (process.env.POWERSHELL_DISTRIBUTION_CHANNEL) {
-    return "pwsh";
-  }
-  if (process.env.BASH_VERSION) {
-    return "bash";
-  }
-  if (process.env.ZSH_VERSION) {
-    return "zsh";
-  }
-  if (process.env.FISH_VERSION) {
-    return "fish";
-  }
-  if (process.env.KSH_VERSION) {
-    return "ksh";
-  }
-  if (process.env.NU_VERSION || process.env.NUSHELL_VERSION) {
-    return "nu";
-  }
-
-  return undefined;
+  const hints: Array<[string, string]> = [
+    ["POWERSHELL_DISTRIBUTION_CHANNEL", "pwsh"],
+    ["BASH_VERSION", "bash"],
+    ["ZSH_VERSION", "zsh"],
+    ["FISH_VERSION", "fish"],
+    ["KSH_VERSION", "ksh"],
+    ["NU_VERSION", "nu"],
+    ["NUSHELL_VERSION", "nu"],
+  ];
+  return hints.find(([key]) => process.env[key])?.[1];
 }
 
 export function sanitizeBinaryOutput(
