@@ -24,6 +24,15 @@ workers.Worker = class extends NativeWorker {
     const execArgv = options.execArgv ?? process.execArgv;
     super(filename, {
       ...options,
+      // Some owners deliberately filter worker environments; retain our private channel.
+      env:
+        options.env && typeof options.env === "object"
+          ? {
+              ...options.env,
+              OPENCLAW_IDLE_MEASURE_CHANNEL: channelName,
+              OPENCLAW_IDLE_MEASURE_TIMERS: process.env.OPENCLAW_IDLE_MEASURE_TIMERS,
+            }
+          : options.env,
       execArgv: [
         ...execArgv,
         ...profileArgs.filter((arg) => !execArgv.includes(arg)),
