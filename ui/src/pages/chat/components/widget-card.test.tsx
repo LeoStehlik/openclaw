@@ -579,7 +579,7 @@ describe("widget-card", () => {
   it("keeps pin failure feedback on the focused button without replaying its toast", async () => {
     const pending = Promise.withResolvers<void>();
     const { provider, snapshot } = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
-    const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => {});
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
     const host = connectedHost();
     const root = mountSolid(
       () => (
