@@ -74,7 +74,6 @@ export function createPositionRail(props: PositionRailParams) {
   let transcriptElement: HTMLElement | undefined;
   let intersectionObserver: IntersectionObserver | undefined;
   let stopTranscriptScroll: (() => void) | undefined;
-  let stopNativeScroll: (() => void) | undefined;
   let stopMessageElements: (() => void) | undefined;
   const observedMessages = new Map<Element, { id: string; messageId: string; visible: boolean }>();
   let visibleIds = new Set<string>();
@@ -226,8 +225,6 @@ export function createPositionRail(props: PositionRailParams) {
   function disconnectVisibility() {
     stopTranscriptScroll?.();
     stopTranscriptScroll = undefined;
-    stopNativeScroll?.();
-    stopNativeScroll = undefined;
     stopMessageElements?.();
     stopMessageElements = undefined;
     scrollElement?.closest(".chat-position-rail")?.removeAttribute("data-overflow");
@@ -256,7 +253,6 @@ export function createPositionRail(props: PositionRailParams) {
         disconnectVisibility();
       }
       transcriptElement = root;
-      stopNativeScroll = listen(root, "scroll", observeLayout, { passive: true });
       stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
         if (observation.type === "offset") {
           // The reading position can cross a landmark without changing the
