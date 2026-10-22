@@ -155,17 +155,14 @@ function ChatHeaderSessionMenuContent(
   };
   const onAction = (action: HeaderMenuAction) => props.onAction(action);
   const actions = new SessionMenuActions(
-    {
-      get updateComplete() {
-        return host.updateComplete;
-      },
-      focusCurrentView() {
+    () => {
+      void host.updateComplete.then(() => {
         if (compactView() === "icon") {
           view.appearance.focusFirst();
         } else {
           menu?.focusFirst();
         }
-      },
+      });
     },
     readState,
     onAction,
