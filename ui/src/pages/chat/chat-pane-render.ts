@@ -6,6 +6,7 @@ import { navigateMarkdownSession } from "../../components/markdown-session-links
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
@@ -13,7 +14,6 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { GitHubPublicationOwner } from "../../lib/sessions/github-publication-owner.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -63,6 +63,8 @@ import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { createChatWidgetLayout } from "./session-message-cache.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
+
+registerChatSessionEnglish();
 
 // Catalog panes have no live run; stable empty inputs preserve their transcript cache.
 const emptyTranscriptItems: [] = [];
@@ -263,7 +265,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
             navigateToModelProvider(this.context, currentAgentId, provider),
           onModelAccounts: () => this.context.navigate("profile"),
         });
-    const projectCatalog = projectsForGateway(this.context.gateway).snapshot;
+    const messages = catalog ? this.history.catalogMessages : state.chatMessages;
     const publicationScope = this.captureConnectionScope();
     const readPublicationRow = () => {
       const row = selectedChatSessionRow(state);
@@ -448,7 +450,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      messages: catalog ? this.history.catalogMessages : state.chatMessages,
+      messages,
       toolMessages: catalog ? emptyTranscriptItems : state.chatToolMessages,
       guardianNotices: catalog ? emptyTranscriptItems : state.guardianNotices,
       streamSegments: catalog ? emptyTranscriptItems : state.chatStreamSegments,
@@ -560,10 +562,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       pullRequestsStatus: this.sessionPullRequestsStatus,
       onDismissPullRequest: this.dismissSessionPullRequest,
       onDismissPullRequestsBranch: this.dismissSessionPullRequestsBranch,
-      // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
-      // Do not mint a checkout link that can prefetch the wrong repository.
-      githubRepo: projectCatalog.result ? this.githubRepo : null,
-      githubRepositories: projectCatalog.repositories,
 
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
