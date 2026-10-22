@@ -46,6 +46,9 @@ import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.j
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
+const pendingInspectionMessage =
+  /still preparing \(phase: inspection; background preparation elapsed: \d+s\)\.[\s\S]*Retry the request after preparation finishes/;
+
 vi.mock("./server/health-state.js", () => ({
   getHealthCache: vi.fn(() => null),
   getHealthVersion: vi.fn(() => 1),
@@ -106,7 +109,7 @@ describe("createGatewayRequestContext", () => {
             request = runInDetachedAsyncContext(() => {
               expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
               expect(() => assertAgentDatabaseAdmitted("main", { env: state.env })).toThrow(
-                "synthetic transport startup inspection",
+                pendingInspectionMessage,
               );
               return handleGatewayRequest({
                 req: {
@@ -130,7 +133,7 @@ describe("createGatewayRequestContext", () => {
             expect(handler).not.toHaveBeenCalled();
             expect(respond).not.toHaveBeenCalled();
             expect(() => assertAgentDatabaseAdmitted("main", { env: state.env })).toThrow(
-              "synthetic transport startup inspection",
+              /still preparing \(phase: readiness; background preparation elapsed: \d+s\)\.[\s\S]*Retry the request after preparation finishes/,
             );
             preparation.resolve();
             await request;
