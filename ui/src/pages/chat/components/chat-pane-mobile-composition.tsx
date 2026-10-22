@@ -46,7 +46,6 @@ import {
 import type { HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
 import "./chat-pane-mobile-composition.css";
-import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -123,6 +122,9 @@ export function ChatPaneMobileComposition(props: {
   });
   const ChatSessionAccessMobile = lazy(() => import("./chat-session-sharing-mobile.tsx"), {
     export: "ChatSessionAccessMobile",
+  });
+  const ChatSessionSharingOptions = lazy(() => import("./chat-session-sharing-options.tsx"), {
+    export: "ChatSessionSharingOptions",
   });
   const host = () => props.header.detailsControl?.mobileHost;
   const mobile = () => Boolean(props.header.mergedChrome && host());

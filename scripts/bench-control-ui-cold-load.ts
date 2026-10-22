@@ -11,6 +11,7 @@
 // --first-load --runs 1 skips warm-up; restart the Gateway separately for a cold server cache.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { chromium, type Browser } from "playwright";
@@ -21,6 +22,7 @@ import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { isChatHistoryState } from "../ui/src/lib/protocol-validators.generated/history-state.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import { createMockGatewayControls } from "../ui/src/test-helpers/control-ui-e2e-controls.ts";
 import {
   createControlUiMockBootstrapConfig,
   installControlUiMockBootstrapDocument,
@@ -475,15 +477,12 @@ if (
 if (
   values["compare-bundle-dir"].length &&
   (!values["bundle-dir"] ||
-    (!values["warm-reload"] && !values["streaming-reply"]) ||
     traced ||
     cpuProfile ||
     values["compare-bundle-dir"].length > 2 ||
     runs % (values["compare-bundle-dir"].length + 1))
 ) {
-  throw new Error(
-    "Bundle comparison requires complete cycles of two or three unprofiled warm or streaming bundles",
-  );
+  throw new Error("Bundle comparison requires complete cycles of two or three unprofiled bundles");
 }
 if (sidebarRowTransfer === "interleaved" && (runs < 14 || runs % 2 !== 0)) {
   throw new Error("Interleaved sidebar transfer requires an even run count of at least 14");
@@ -507,15 +506,18 @@ const dirty = explicitBuildId
 const bundleDir = values["bundle-dir"]
   ? path.resolve(values["bundle-dir"])
   : path.join(artifactDir, "ui");
-if (gatewayUrl && !explicitBuildId) {
-  const html = await readFile(path.join(bundleDir, "index.html"), "utf8");
+async function readBundleBuildId(directory: string): Promise<string> {
+  const html = await readFile(path.join(directory, "index.html"), "utf8");
   const identity = html.match(
     /globalThis\.OPENCLAW_CONTROL_UI_BUILD_INFO=(\{.*?\});<\/script>/su,
   )?.[1];
   if (!identity) {
-    throw new Error("Gateway benchmarking requires a bundle with embedded build identity");
+    throw new Error("Benchmarking requires a bundle with embedded build identity");
   }
-  buildId = normalizeControlUiBuildInfo(JSON.parse(identity)).buildId;
+  return normalizeControlUiBuildInfo(JSON.parse(identity)).buildId;
+}
+if (values["bundle-dir"] && !explicitBuildId) {
+  buildId = await readBundleBuildId(bundleDir);
 }
 const server = gatewayUrl
   ? undefined
@@ -526,6 +528,10 @@ const baseUrl = gatewayUrl?.origin ?? server!.baseUrl;
 const comparisonBundleDirs = values["compare-bundle-dir"].map((directory) =>
   path.resolve(directory),
 );
+const bundleBuildIds = [
+  buildId,
+  ...(await Promise.all(comparisonBundleDirs.map(readBundleBuildId))),
+];
 const parkedBaselineDir = path.join(artifactDir, "baseline-bundle");
 const bundleSlots = [parkedBaselineDir, ...comparisonBundleDirs];
 let activeBundle = 0;
@@ -626,16 +632,14 @@ try {
     permissions: ["local-network-access"],
   });
   const page = await context.newPage();
+  const mockGateway = createMockGatewayControls(page, fixture.selectedSessionKey, [], {});
   await page.addInitScript("globalThis.__name = (fn) => fn");
   await page.addInitScript(
-    ({ measurePresentation, bootRoute: measuredRoute }) => {
+    ({ bootRoute: measuredRoute }) => {
       if (window !== window.top) {
         return;
       }
       performance.setResourceTimingBufferSize(4096);
-      if (!measurePresentation) {
-        return;
-      }
       const milestones = {
         firstEnabledComposerMs: null as number | null,
         firstComposerFocusMs: null as number | null,
@@ -690,7 +694,7 @@ try {
       };
       requestAnimationFrame(sample);
     },
-    { measurePresentation: firstLoad || Boolean(gatewayUrl), bootRoute },
+    { bootRoute },
   );
   const rigProbeScript = values["probe-dir"]
     ? (
@@ -1117,6 +1121,7 @@ try {
     for (let index = 1; index < bundleSlots.length; index++) {
       await restoreColdLoadWarmState(page, warmStorage);
       await selectComparisonBundle(index);
+      await mockGateway.setServerBuildId(bundleBuildIds[index]!);
       await page.reload({ waitUntil: "domcontentloaded" });
       await settle();
       await expandSidebar();
@@ -1145,6 +1150,7 @@ try {
   }
   await selectComparisonBundle(0);
   for (let run = 0; run < runs; run++) {
+    const hostLoadAverage = loadavg();
     const cpuPhases: Record<string, ColdLoadCpuTables> = {};
     async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
       const mapped = await mapColdLoadCpuProfile(profile, {
@@ -1177,6 +1183,9 @@ try {
       await restoreColdLoadWarmState(page, warmStates[bundleIndex]!);
     }
     await selectComparisonBundle(bundleIndex);
+    if (comparisonBundleDirs.length) {
+      await mockGateway.setServerBuildId(bundleBuildIds[bundleIndex]!);
+    }
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -1934,6 +1943,7 @@ try {
     await cdp.detach();
     const result = {
       run: run + 1,
+      hostLoadAverage,
       ...(comparisonBundleDirs.length
         ? {
             variant: ["base", "candidate", "candidate-2"][bundleIndex],

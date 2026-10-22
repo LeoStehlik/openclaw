@@ -17,6 +17,8 @@ export function SessionPicker(props: {
   > & { [name: `data-${string}`]: string | undefined };
   params: NewSessionPlaceControlsOptions;
   children: JSX.Element;
+  lazy?: boolean;
+  onBeforeShow?: (event: Event) => void;
   onAfterHide?: () => void;
   ref?: (handle: PopoverHandle) => void;
 }) {
@@ -76,6 +78,8 @@ export function SessionPicker(props: {
         </button>
       </span>
       <Popover
+        lazy={props.lazy}
+        onBeforeShow={props.onBeforeShow}
         id={`new-session-${props.kind}-popover`}
         label={props.label}
         anchor={trigger}
