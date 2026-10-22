@@ -345,9 +345,6 @@ export function createConfigPage(
     } else {
       patchSettings(patch);
     }
-    // theme.refresh() also republishes non-theme appearance prefs (text
-    // scale, lobster pet visits/sounds) to app-host subscribers.
-    context.theme.refresh();
     invalidate();
   }
 
@@ -388,7 +385,6 @@ export function createConfigPage(
         void i18n.useSystemLocale();
       }
     } else {
-      context.theme.refresh();
       invalidate();
     }
   }
