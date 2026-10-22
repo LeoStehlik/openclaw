@@ -127,44 +127,6 @@ function buildAgentSteeringPromptSection(item: PreparedSteeringItem, index: numb
   ].join("\n");
 }
 
-async function selectPromptBoundedItems(
-  items: readonly AgentSteeringQueueItem[],
-  readResult: (entry: SubagentRunRecord) => Promise<PreparedAnnounceResult>,
-): Promise<{ items: PreparedSteeringItem[]; prompt: string } | undefined> {
-  const selected: PreparedSteeringItem[] = [];
-  const sections: string[] = [];
-  let promptLength = MERGED_AGENT_STEERING_PROMPT_HEADER.length;
-  for (const item of items) {
-    const result = await readResult(item.entry);
-    const prepared: PreparedSteeringItem = {
-      ...item,
-      result,
-      isCurrent: (entry) =>
-        entry !== undefined && isSameSubagentRunOwner(entry, item.entry) && result.isCurrent(),
-    };
-    const section = buildAgentSteeringPromptSection(prepared, selected.length);
-    // Account for the exact separator so selection preserves the rendered character cap.
-    const nextPromptLength = promptLength + "\n\n".length + section.length;
-    if (nextPromptLength > MAX_MERGED_STEERING_CHARS && selected.length > 0) {
-      break;
-    }
-    selected.push(prepared);
-    sections.push(section);
-    promptLength = nextPromptLength;
-    // Deliver an oversized first result whole so the soft cap cannot strand it.
-    if (promptLength > MAX_MERGED_STEERING_CHARS) {
-      break;
-    }
-  }
-  if (selected.length === 0) {
-    return undefined;
-  }
-  return {
-    items: selected,
-    prompt: [MERGED_AGENT_STEERING_PROMPT_HEADER, ...sections].join("\n\n"),
-  };
-}
-
 /** Prepare result I/O before the registry admits the synchronous lease decision. */
 export async function preparePendingAgentSteeringLease(params: {
   runs: ReadonlyMap<string, SubagentRunRecord>;
@@ -193,14 +155,37 @@ export async function preparePendingAgentSteeringLease(params: {
       pending.push({ runId: entry.runId, entry, payload });
     }
   }
-  const selection = await selectPromptBoundedItems(
-    pending.toSorted(sortPendingSteeringItems),
-    params.readResult,
-  );
-  if (!selection) {
+  const sortedPending = pending.toSorted(sortPendingSteeringItems);
+  const readResult = params.readResult;
+  const items: PreparedSteeringItem[] = [];
+  const sections: string[] = [];
+  let promptLength = MERGED_AGENT_STEERING_PROMPT_HEADER.length;
+  for (const item of sortedPending) {
+    const result = await readResult(item.entry);
+    const prepared: PreparedSteeringItem = {
+      ...item,
+      result,
+      isCurrent: (entry) =>
+        entry !== undefined && isSameSubagentRunOwner(entry, item.entry) && result.isCurrent(),
+    };
+    const section = buildAgentSteeringPromptSection(prepared, items.length);
+    // Account for the exact separator so selection preserves the rendered character cap.
+    const nextPromptLength = promptLength + "\n\n".length + section.length;
+    if (nextPromptLength > MAX_MERGED_STEERING_CHARS && items.length > 0) {
+      break;
+    }
+    items.push(prepared);
+    sections.push(section);
+    promptLength = nextPromptLength;
+    // Deliver an oversized first result whole so the soft cap cannot strand it.
+    if (promptLength > MAX_MERGED_STEERING_CHARS) {
+      break;
+    }
+  }
+  if (items.length === 0) {
     return undefined;
   }
-  const { items, prompt } = selection;
+  const prompt = [MERGED_AGENT_STEERING_PROMPT_HEADER, ...sections].join("\n\n");
   const runIds = items.map((item) => item.runId);
   const isCurrent = () =>
     items.every((item) => {
