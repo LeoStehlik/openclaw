@@ -148,6 +148,7 @@ export async function confirmSessionArchive(
             : ""),
         confirmLabel: t("sessionsView.archiveAllSessions", { count: String(rows.length) }),
         alternativeLabel: t("sessionsView.archiveThisSession"),
+        groupChoicesOnMobile: true,
         signal: scope.signal,
       });
       if (!isCurrent() || choice === null) {

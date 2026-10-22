@@ -110,7 +110,7 @@ describe("AppSidebar child session archives", () => {
         }
         const actions = await waitForConfirmDialogActions();
         expect(document.body.textContent).toContain('"Parent task" has 1 directly nested session.');
-        expect(actions.textContent).toContain("Archive this session");
+        expect(actions.textContent).toContain("Archive only this session");
         expect(actions.textContent).toContain("Archive all (2)");
         answerConfirmDialog(actions, "cancel");
         await vi.dynamicImportSettled();

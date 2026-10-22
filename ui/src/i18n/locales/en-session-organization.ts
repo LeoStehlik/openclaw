@@ -296,7 +296,7 @@ const enSessionOrganization = {
       '"{session}" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
     archiveSessionNestedOther:
       '"{session}" has {count} directly nested sessions. If you archive only this session, those nested sessions move to the top level.',
-    archiveThisSession: "Archive this session",
+    archiveThisSession: "Archive only this session",
     archiveAllSessions: "Archive all ({count})",
     moveToTopLevel: en.sessionsView.moveToTopLevel,
     archiveTreeRootRequired:
