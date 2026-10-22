@@ -73,12 +73,14 @@ suite.define(() => {
       expect(await gateway.getRequests("users.self")).toHaveLength(initialReads + 2);
       expect(await gateway.getRequests("users.list")).toHaveLength(0);
       const renamed = { ...testProfile, displayName: "My display name", updatedAt: 4 };
-      await gateway.setMethodResponse("users.setDisplayName", { profile: renamed });
-      await gateway.setMethodResponse("users.self", { profile: renamed });
+      await gateway.deferNext("users.setDisplayName");
       await page
         .getByRole("textbox", { name: "Display name", exact: true })
         .fill(renamed.displayName);
       await page.locator(".identity-name-control button").click();
+      await gateway.waitForRequest("users.setDisplayName");
+      await gateway.setMethodResponse("users.self", { profile: renamed });
+      await gateway.resolveDeferred("users.setDisplayName", { profile: renamed });
       await expect(page.locator(".profile-hero__name")).toHaveText(renamed.displayName);
       expect(
         (await gateway.getRequests("users.setDisplayName")).map((request) => request.params),
