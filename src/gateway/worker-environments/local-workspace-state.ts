@@ -20,10 +20,6 @@ import {
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
 import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
-import {
-  createLocalWorkspaceManifestTree,
-  localWorkspaceManifestRootReference,
-} from "./local-workspace-manifest-tree.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -125,20 +121,10 @@ export function projectionOperations(
     ref: string,
     patch: Parameters<typeof store.update>[1] = {},
   ) => {
-    const manifest = parseWorkerWorkspaceManifest(raw, ref, await buildCacheInputs());
-    const records = createLocalWorkspaceManifestTree([
-      ...manifest.entries,
-      ...(manifest.directories ?? []).map((entryPath) => ({
-        path: entryPath,
-        type: "directory" as const,
-      })),
-    ]);
     await update(patch, {
-      previousRoot: current().baseline_ref,
-      resultingRoot: localWorkspaceManifestRootReference(records, manifest.baseCommit),
-      records: [...records.values()],
-      removed: [],
-      replace: true,
+      rawManifest: raw,
+      manifestRef: ref,
+      buildCacheInputs: await buildCacheInputs(),
     });
   };
   const migrateBaseline = async () => {

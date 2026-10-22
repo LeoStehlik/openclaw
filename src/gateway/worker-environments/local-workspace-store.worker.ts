@@ -29,11 +29,11 @@ export const localWorkspaceOperations = {
     ) {
       throw new Error("Local workspace mutation requires reconciliation custody");
     }
-    // The host owns this internal wire shape. Decode before entering the transaction;
+    // The workspace owner prepares this wire shape. Decode before entering the transaction;
     // current leases and registry predicates still gate the actual commit below.
     const mutation: LocalWorkspaceMutation =
       input.mutation instanceof Uint8Array
-        ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The host serialized a LocalWorkspaceMutation.
+        ? (deserialize(inflateRawSync(input.mutation)) as LocalWorkspaceMutation) // SAFETY: The workspace owner serialized a LocalWorkspaceMutation.
         : input.mutation;
     return runOpenClawStateWriteTransaction(
       ({ db }) => {

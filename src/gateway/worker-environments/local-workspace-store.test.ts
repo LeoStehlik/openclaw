@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
@@ -42,6 +42,7 @@ import {
   localWorkspaceProjectionFixture,
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -289,6 +290,83 @@ it("accepts manifest nodes and checkpoint headers atomically and preserves them 
     expect(row).toMatchObject({ baseline_ref: nextRoot, checkpoint_json: "next receipt" });
   });
   expect(nodeRows().map((row) => row.path)).toEqual(["", "kept.txt"]);
+});
+
+it("keeps prepared baseline replacement atomic through rollback and a lost commit reply", async () => {
+  const worktreeId = randomUUID();
+  const rawManifest = serializeWorkerWorkspaceManifest({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: [{ path: "src/next.txt", type: "file", mode: 0o644, size: 4, sha256: "b".repeat(64) }],
+    directories: ["src"],
+  });
+  const manifestRef = `sha256:${createHash("sha256").update(rawManifest).digest("hex")}`;
+  const document = { rawManifest, manifestRef, buildCacheInputs: [] };
+  const initial = await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+    store.create({
+      ...localWorkspaceProjectionFixture(worktreeId, root),
+      baseline_json: rawManifest,
+      baseline_ref: manifestRef,
+    }),
+  );
+  const database = openOpenClawStateDatabase({ env });
+  const nodePaths = () =>
+    database.db
+      .prepare(
+        "SELECT path FROM local_workspace_manifest_nodes WHERE worktree_id = ? ORDER BY path",
+      )
+      .all(worktreeId)
+      .map((row) => row.path);
+  const replace = () =>
+    withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+      store.update(
+        store.get()!,
+        {
+          pending_ref: "refs/openclaw/results/accepted",
+          // Manifest publication must override obsolete full-document fields in the patch.
+          baseline_ref: "sha256:superseded",
+          baseline_json: "superseded",
+        },
+        undefined,
+        document,
+      ),
+    );
+  database.db
+    .exec(`CREATE TRIGGER refuse_prepared_baseline BEFORE UPDATE ON local_workspace_projections
+    WHEN NEW.worktree_id = '${worktreeId}'
+    BEGIN SELECT RAISE(ABORT, 'synthetic prepared baseline interruption'); END;`);
+  try {
+    await expect(replace()).rejects.toThrow("synthetic prepared baseline interruption");
+    expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(initial);
+    expect(nodePaths()).toEqual([]);
+  } finally {
+    database.db.exec("DROP TRIGGER refuse_prepared_baseline;");
+  }
+  let writes = 0;
+  const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
+    const reply = await scope.execute(command, executeOptions);
+    if (command.type === "localWorkspace.mutate") {
+      writes++;
+      throw new Error("Synthetic prepared baseline reply lost after commit");
+    }
+    return reply;
+  });
+  const acknowledged = await replace();
+  lostReply.mockRestore();
+  expect(writes).toBe(1);
+  expect(acknowledged).toMatchObject({
+    revision: initial.revision + 1,
+    baseline_json: null,
+    pending_ref: "refs/openclaw/results/accepted",
+  });
+  expect(acknowledged.baseline_ref).not.toBe(manifestRef);
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(acknowledged);
+  expect(nodePaths()).toEqual(["", "src", "src/next.txt"]);
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const materialized = await store.manifest(store.get()!, { kind: "materialize" });
+    assert(materialized.kind === "materialize");
+    expect(JSON.parse(materialized.rawManifest)).toMatchObject(JSON.parse(rawManifest));
+  });
 });
 
 it.each([
