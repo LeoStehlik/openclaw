@@ -16,14 +16,6 @@ function isSuppressedByEnv(value: string | undefined): boolean {
   );
 }
 
-function isCopySensitiveToken(word: string): boolean {
-  if (word.includes("/") || word.includes("\\")) {
-    return true;
-  }
-  // Preserve common file-like tokens (for example administrators_authorized_keys).
-  return word.includes("_") && FILE_LIKE_RE.test(word);
-}
-
 function wrapLine(line: string, maxWidth: number): string[] {
   if (line.trim().length === 0) {
     return [line];
@@ -60,7 +52,12 @@ function wrapLine(line: string, maxWidth: number): string[] {
 
     if (
       (isPrintableAscii ? word.length : visibleWidth(word)) > available &&
-      !isCopySensitiveToken(word)
+      // Preserve paths and file-like tokens (for example administrators_authorized_keys).
+      !(
+        word.includes("/") ||
+        word.includes("\\") ||
+        (word.includes("_") && FILE_LIKE_RE.test(word))
+      )
     ) {
       // Measure whole graphemes in visible columns so CJK/emoji do not overflow.
       // Keep this word's initial budget for all fragments, even when the next prefix differs.
@@ -92,24 +89,22 @@ function wrapLine(line: string, maxWidth: number): string[] {
   return lines;
 }
 
-function coerceNoteMessage(message: unknown): string {
-  if (typeof message === "string") {
-    return message;
-  }
-  if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
-    return String(message);
-  }
-  if (message instanceof Error) {
-    return message.message ? `${message.name}: ${message.message}` : message.name;
-  }
-  return "";
-}
-
 export function wrapNoteMessage(
   message: unknown,
   options: { maxWidth?: number; columns?: number } = {},
 ): string {
-  const text = coerceNoteMessage(message);
+  let text = "";
+  if (typeof message === "string") {
+    text = message;
+  } else if (
+    typeof message === "number" ||
+    typeof message === "boolean" ||
+    typeof message === "bigint"
+  ) {
+    text = String(message);
+  } else if (message instanceof Error) {
+    text = message.message ? `${message.name}: ${message.message}` : message.name;
+  }
   const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
   const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
   return text
@@ -132,19 +127,6 @@ export function resolveNoteOutputColumns(message: string, columns: number): numb
   return Math.max(columns, widestLine + 6);
 }
 
-function createNoteOutput(output: NodeJS.WriteStream, columns: number): NodeJS.WriteStream {
-  if (output.columns === columns) {
-    return output;
-  }
-  const adaptedOutput = Object.create(output) as NodeJS.WriteStream;
-  Object.defineProperty(adaptedOutput, "columns", {
-    value: columns,
-    configurable: true,
-  });
-  adaptedOutput.write = output.write.bind(output);
-  return adaptedOutput;
-}
-
 export function noteToStream(
   message: unknown,
   title: string | undefined,
@@ -158,9 +140,18 @@ export function noteToStream(
   }
   const columns = resolveNoteColumns(output.columns);
   const wrappedMessage = wrapNoteMessage(message, { columns });
-  clackNote(wrappedMessage, stylePromptTitle(title), {
-    output: createNoteOutput(output, resolveNoteOutputColumns(wrappedMessage, columns)),
-  });
+  const styledTitle = stylePromptTitle(title);
+  const outputColumns = resolveNoteOutputColumns(wrappedMessage, columns);
+  let adaptedOutput = output;
+  if (output.columns !== outputColumns) {
+    adaptedOutput = Object.create(output) as NodeJS.WriteStream;
+    Object.defineProperty(adaptedOutput, "columns", {
+      value: outputColumns,
+      configurable: true,
+    });
+    adaptedOutput.write = output.write.bind(output);
+  }
+  clackNote(wrappedMessage, styledTitle, { output: adaptedOutput });
 }
 
 export function note(message: unknown, title?: string) {
