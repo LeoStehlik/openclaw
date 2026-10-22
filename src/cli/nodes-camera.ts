@@ -207,27 +207,23 @@ async function writeUrlToFile(filePath: string, url: string, opts: { expectedHos
       filePath,
       writeTemp: async (tempPath) => {
         const fileHandle = await fs.open(tempPath, "wx");
-        const reader = body.getReader();
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              break;
-            }
-            bytes += value.byteLength;
-            if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
-              await reader.cancel().catch(() => undefined);
-              throw new Error(
-                `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
-              );
-            }
-            await fileHandle.writeFile(value);
-          }
+          await body.pipeTo(
+            new WritableStream<Uint8Array>({
+              async write(value) {
+                bytes += value.byteLength;
+                if (bytes > MAX_CAMERA_URL_DOWNLOAD_BYTES) {
+                  throw new Error(
+                    `writeUrlToFile: downloaded ${bytes} bytes, exceeds max ${MAX_CAMERA_URL_DOWNLOAD_BYTES}`,
+                  );
+                }
+                await fileHandle.writeFile(value);
+              },
+            }),
+          );
         } catch (err) {
-          await reader.cancel().catch(() => undefined);
           throw toErrorObject(err, "Non-Error thrown");
         } finally {
-          reader.releaseLock();
           await fileHandle.close();
         }
         if (bytes === 0) {
