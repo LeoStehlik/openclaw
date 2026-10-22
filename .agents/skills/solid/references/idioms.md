@@ -177,8 +177,9 @@ inside a stable callback when the parent may replace the handler:
 A local lifetime-stable function can be bound directly. Dynamic elements use
 runtime prop spreads, which can update handlers; do not add wrappers solely for
 that case. Native capture/options and events stopped by an enclosing native
-boundary still need the owned listener/ref pattern. Dashed events use
-`onWa-select`, not `onWaSelect`. Prefer the existing owned primitive to `wa-*`.
+boundary still need the owned listener/ref pattern. Dashed events keep their
+exact names, such as `onOverlay-after-show` in
+[Menu](../../../../ui/src/components/solid/menu.tsx).
 
 Commit-on-change inputs need special care: unrelated props refreshes must not
 rewrite the DOM draft. Memoize the committed owner value and bind it through the

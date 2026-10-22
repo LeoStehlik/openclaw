@@ -80,6 +80,12 @@ abort RPCs. Do not call a publishing owner command from a pure memo: it may
 synchronously write a signal, and it can duplicate admission already owned by
 the route, reconnect handler, or event coordinator.
 
+[Runtime Config](../../../../ui/src/lib/config/runtime-config-capability.ts)
+also retains its admitted `schemaRead` completion. The
+[Config view](../../../../ui/src/pages/config/view.tsx) observes that receipt,
+keeps an accepted editor mounted during refresh, and retries failed reads
+through the same owner.
+
 If the owner instead exposes a pure asynchronous read operation, it can be
 called directly: `createMemo(() => owner.readDetails(props.id))`. The owner
 still owns the complete request identity and accepted result. Do not replace
@@ -499,21 +505,21 @@ drafts outside the error slot so retry can recover the region in place.
 
 Use `lazy` for the component code, and retain the route's existing component
 loader. The loader still controls when import begins and when the router
-considers the module ready:
+considers the module ready. The [cron route](../../../../ui/src/pages/cron/route.tsx)
+preloads its [entry](../../../../ui/src/pages/cron/cron-page-entry.tsx) this way:
 
 ```ts
 // route.tsx: keep rendering and its runtime imports behind the route boundary.
 component: async () => {
   const entry = await import("./cron-page-entry.tsx");
   await entry.CronPage.preload();
-  return entry;
+  return { renderSolid: entry.renderSolid };
 },
 ```
 
 ```tsx
 // cron-page-entry.tsx: loaded only by the route's component loader.
 export const CronPage = lazy(() => import("./cron-page.tsx"), { export: "CronPage" });
-export const header = true;
 export function renderSolid(props: SolidRouteProps) {
   return (
     <Loading>
