@@ -1,3 +1,5 @@
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
+
 export type PollInput = {
   question: string;
   options: string[];
@@ -49,11 +51,7 @@ export function normalizePollInput(
   if (options.maxOptions !== undefined && cleaned.length > options.maxOptions) {
     throw new Error(`Poll supports at most ${options.maxOptions} options`);
   }
-  const maxSelectionsRaw = input.maxSelections;
-  const maxSelections =
-    typeof maxSelectionsRaw === "number" && Number.isFinite(maxSelectionsRaw)
-      ? Math.floor(maxSelectionsRaw)
-      : 1;
+  const maxSelections = resolveOptionalIntegerOption(input.maxSelections) ?? 1;
   if (maxSelections < 1) {
     throw new Error("maxSelections must be at least 1");
   }
@@ -61,20 +59,12 @@ export function normalizePollInput(
     throw new Error("maxSelections cannot exceed option count");
   }
 
-  const durationSecondsRaw = input.durationSeconds;
-  const durationSeconds =
-    typeof durationSecondsRaw === "number" && Number.isFinite(durationSecondsRaw)
-      ? Math.floor(durationSecondsRaw)
-      : undefined;
+  const durationSeconds = resolveOptionalIntegerOption(input.durationSeconds);
   if (durationSeconds !== undefined && durationSeconds < 1) {
     throw new Error("durationSeconds must be at least 1");
   }
 
-  const durationRaw = input.durationHours;
-  const durationHours =
-    typeof durationRaw === "number" && Number.isFinite(durationRaw)
-      ? Math.floor(durationRaw)
-      : undefined;
+  const durationHours = resolveOptionalIntegerOption(input.durationHours);
   if (durationHours !== undefined && durationHours < 1) {
     throw new Error("durationHours must be at least 1");
   }
@@ -94,7 +84,6 @@ export function normalizePollDurationHours(
   value: number | undefined,
   options: { defaultHours: number; maxHours: number },
 ): number {
-  const base =
-    typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : options.defaultHours;
+  const base = resolveOptionalIntegerOption(value) ?? options.defaultHours;
   return Math.min(Math.max(base, 1), options.maxHours);
 }
