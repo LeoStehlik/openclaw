@@ -101,7 +101,7 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
   // Live preview text changes independently of the retained marker window.
   const markers = createMemo(() => props.markers);
   const renderedIndexes = createMemo(() => props.renderedIndexes);
-  const count = createMemo(() => markers().length);
+  const count = () => markers().length;
   const hoveredId = createMemo(() => props.hoveredId);
   const rovingId = createMemo(() => props.rovingId);
   const activeId = createMemo(() => props.activeId);
