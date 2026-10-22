@@ -63,7 +63,8 @@ describe("Where chip", () => {
   it("loads the menu on first open, focuses its search, and retains it after closing", async () => {
     const props = pickerParams(true);
     vi.spyOn(props.params.place.browser, "popoverOpen").mockReturnValue(false);
-    vi.mocked(props.params.place.modelControl.hostedEnvironments).mockClear();
+    const hostedEnvironments = vi.spyOn(props.params.place.modelControl, "hostedEnvironments");
+    hostedEnvironments.mockClear();
     let picker: PopoverHandle | undefined;
     const { container } = mountSolid(() =>
       createComponent(WhereChip, {
@@ -74,7 +75,7 @@ describe("Where chip", () => {
       }),
     );
     expect(container.querySelector(".new-session-page__environment-list")).toBeNull();
-    expect(props.params.place.modelControl.hostedEnvironments).not.toHaveBeenCalled();
+    expect(hostedEnvironments).not.toHaveBeenCalled();
     const trigger = expectDefined(
       container.querySelector<HTMLButtonElement>("#new-session-where-trigger"),
       "Where trigger",
