@@ -181,25 +181,6 @@ function ensureProfileForProviderIdentity(params: {
   );
 }
 
-/** The caller owns adoption policy, the before-image, and the transaction. */
-export function writeUserProfileDisplayName(
-  db: EngineConnection,
-  profileId: string,
-  displayName: string | null,
-  now: number,
-  options: UserProfileMutationOptions,
-): void {
-  executeSqliteQuerySync(
-    db,
-    userProfilesDb(db)
-      .updateTable("user_profiles")
-      .set({ display_name: displayName, updated_at: now })
-      .where("id", "=", profileId),
-  );
-  options.mutation?.publish(profileId);
-  publishUserProfilesChange(db, profileId);
-}
-
 function adoptDisplayNameIfEmpty(
   profileId: string,
   displayName: string | null,
@@ -220,7 +201,15 @@ function adoptDisplayNameIfEmpty(
       if (profile.display_name?.trim()) {
         return toUserProfile(profile);
       }
-      writeUserProfileDisplayName(db, profile.id, displayName, now, options);
+      executeSqliteQuerySync(
+        db,
+        userProfilesDb(db)
+          .updateTable("user_profiles")
+          .set({ display_name: displayName, updated_at: now })
+          .where("id", "=", profile.id),
+      );
+      options.mutation?.publish(profile.id);
+      publishUserProfilesChange(db, profile.id);
       return toUserProfile({ ...profile, display_name: displayName, updated_at: now });
     },
     options,
