@@ -5,6 +5,7 @@ import {
   createSignal,
   createStore,
   Errored,
+  latest,
   lazy,
   Loading,
   onCleanup,
@@ -371,7 +372,7 @@ export function ChatProviderReviewNotice(props: ProviderReviewViewProps) {
                   when={view().error}
                   fallback={
                     <Errored fallback={(error) => <span>{formatUiError(error())}</span>}>
-                      {props.owner.completed()}
+                      {latest(props.owner.completed)}
                     </Errored>
                   }
                 >
@@ -461,7 +462,7 @@ export function ChatProviderReviewDialog(props: ProviderReviewViewProps) {
                             </p>
                           )}
                         >
-                          {props.owner.completed()}
+                          {latest(props.owner.completed)}
                           {status()}
                         </Errored>
                       }
