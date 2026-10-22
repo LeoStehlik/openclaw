@@ -145,7 +145,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("opens Settings pickers from publication and acquires only on Refresh or Retry", async () => {
+  it("opens Settings pickers from publication and recovers provider failures on Refresh", async () => {
     const frames: unknown[] = [];
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
@@ -366,10 +366,13 @@ suite.define(() => {
           const failed = await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
-          const retry = settings
-            .locator(".model-providers__catalog-progress")
-            .getByRole("button", { name: "Retry", exact: true });
-          await retry.waitFor({ state: "visible" });
+          const unavailable = settings
+            .locator('[data-provider-id="ollama"]')
+            .getByText("Models unavailable", { exact: true });
+          await unavailable.waitFor({ state: "visible" });
+          expect(
+            await settings.locator('.model-providers__catalog-progress[role="alert"]').count(),
+          ).toBe(0);
           expect(await settings.textContent()).not.toContain("Open Models to try again.");
           expect(acquisitions()).toBe(initialAcquisitions + 3);
           await open();
@@ -383,22 +386,22 @@ suite.define(() => {
           });
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "failed-refresh", acquisitions: acquisitions() });
-          await retry.scrollIntoViewIfNeeded();
+          await unavailable.scrollIntoViewIfNeeded();
           await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
           providerModel = "recovered-fixture:latest";
-          acquisitionDiagnostics.trigger("retry");
-          await catalogRefresh(() => retry.click());
-          await retry.waitFor({ state: "hidden" });
+          acquisitionDiagnostics.trigger("refresh");
+          await catalogRefresh(() => refreshButton.click());
+          await unavailable.waitFor({ state: "hidden" });
           await open();
           await primary
             .locator('[role="option"][data-value="ollama/recovered-fixture:latest"]')
             .waitFor({ state: "visible" });
           expect(acquisitions()).toBe(initialAcquisitions + 4);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "retry", acquisitions: acquisitions() });
-          await capture("settings-retry.png");
+          stages.push({ stage: "refresh-recovery", acquisitions: acquisitions() });
+          await capture("settings-refresh-recovered.png");
         },
       );
     } catch (error) {
