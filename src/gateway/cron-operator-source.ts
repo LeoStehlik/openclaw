@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { captureCronJobSourceAuthority } from "../cron/active-jobs.js";
 import type { CronCompletionDeliveryFence } from "../cron/delivery-attempt-fence.js";
-import { resolveCronRequesterExecutionRevision } from "../cron/service/jobs-tool-policy.js";
+import { cronOperatorSourceMatchesJob } from "../cron/service/jobs-tool-policy.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
@@ -22,24 +22,28 @@ export async function restoreCronOperatorSource(params: {
   }
   const captured = params.job.operatorSource;
   const source = decodeGatewayOperatorRecoverySource(captured.source);
-  if (captured.executionRevision !== resolveCronRequesterExecutionRevision(params.job)) {
-    throw new Error(
-      "Scheduled operator continuation definition changed; recreate it from an authenticated turn",
-    );
-  }
   const context = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext?.();
   const assertOccurrence = captureCronJobSourceAuthority(params.job.id);
   if (!context || !assertOccurrence || !params.deliveryAttemptFence) {
     throw new Error("Scheduled operator continuation requires its live Gateway occurrence");
   }
   const fence = params.deliveryAttemptFence;
+  let admitted = false;
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     // Admission may force-run an already paused job; later disable/remove edits
     // revoke this exact occurrence through its existing cancellation owner.
     assertOccurrence();
     fence.assertCurrent();
+    if (admitted) {
+      return;
+    }
     const current: CronStoredJob | undefined = context.cron.getJob(params.job.id);
+    if (current?.operatorSource && !cronOperatorSourceMatchesJob(current)) {
+      throw new Error(
+        "Scheduled operator continuation definition changed; recreate it from an authenticated turn",
+      );
+    }
     const policy = current?.scheduledToolPolicy;
     if (
       context.resolveGatewayContext?.() !== context ||
@@ -59,10 +63,18 @@ export async function restoreCronOperatorSource(params: {
     }
   };
   assertCurrent();
-  return await restoreGatewayOperatorSource({
+  const operator = await restoreGatewayOperatorSource({
     snapshot: source.snapshot,
     target: source,
     context,
     assertCurrent,
   });
+  try {
+    assertCurrent();
+    admitted = true;
+    return operator;
+  } catch (error) {
+    operator.release();
+    throw error;
+  }
 }

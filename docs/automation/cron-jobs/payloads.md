@@ -122,10 +122,17 @@ The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.
 
 This source is not inferred for existing jobs, guests, isolated/current targets,
-scripts, or another conversation. Executable edits discard it unless an
-authenticated creator schedules a fresh continuation; display-only edits retain
-it. Disabling, removing, or replacing the job or session retires the active
-occurrence. Re-enabling the job does not revive a revoked occurrence.
+scripts, or another conversation. An authenticated owner update can bind it again
+to the updated task. Executable edits without that authentication discard it.
+Timing, display-only edits, and disabling or re-enabling the job preserve its
+stored source. Disabling or removing a job still cancels its active occurrence;
+re-enabling it does not revive that cancelled occurrence.
+
+A continuation waits for its current conversation turn to finish before reading
+the current job and checking its source at launch. Trigger-supplied context does
+not change that stored definition. Existing stored sources remain valid after an
+upgrade, including jobs the scheduler disabled. A rejected source is recorded as
+a terminal failure instead of repeatedly retrying the same authority error.
 
 While an `at` agent-turn continuation in an explicitly named conversation waits
 for a result, it can call `automations` with `action: "next_check"` and `in: "3m"`
@@ -151,7 +158,7 @@ A new account-bound job created by a verified local administrator retains that
 authenticated local source, allowing provider-permitted reads through its saved
 creator account. Editing its `toolsAllow` cap from the same local source explicitly
 reauthorizes an existing job. Description, display-label, and exact no-op edits
-preserve the recorded source. Changes to model-facing names, prompts, tools, schedules,
+preserve the recorded source. Changes to prompts, tools,
 or other executable behavior need fresh source authorization and clear the old source
 when none is present. Remote management alone cannot supply local-source authorization,
 and older jobs without a provable origin remain blocked until reauthorized or recreated
@@ -175,7 +182,7 @@ or thread permissions must allow the edit. The original session creator and a
 configured OpenClaw owner are not substitutes for those native permissions.
 
 Executable edits from the job's owning conversation and account bind the job to
-the current authorized editor. This includes the prompt, model, name, schedule,
+the current authorized editor. This includes the prompt, model,
 delivery, and tool policy. An executable edit without a matching authenticated
 Discord requester clears this permission and stops further native actions from
 the old occurrence. Description and display-label changes preserve it.

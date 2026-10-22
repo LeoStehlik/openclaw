@@ -86,8 +86,7 @@ export function cronJobMessageActionAuthorityInputsEqual(
   );
 }
 
-/** Binds native requester authority to executable inputs using the canonical storage projection. */
-export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
+function resolveLegacyCronRequesterExecutionRevision(job: CronStoredJob): string {
   const {
     operatorSource: _operatorSource,
     description: _description,
@@ -97,6 +96,40 @@ export function resolveCronRequesterExecutionRevision(job: CronStoredJob): strin
     ...executableJob
   } = job;
   return resolveCronJobConfigRevision(executableJob);
+}
+
+/** Bind authority to execution, not to the scheduler's timing or enablement. */
+export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
+  const {
+    pacing: _pacing,
+    activeHours: _activeHours,
+    idleOnly: _idleOnly,
+    failureAlert: _failureAlert,
+    ...execution
+  } = job;
+  return resolveLegacyCronRequesterExecutionRevision({
+    ...execution,
+    name: "Scheduled execution",
+    createdAtMs: 0,
+    enabled: true,
+    deleteAfterRun: false,
+    schedule:
+      job.schedule.kind === "at" || job.schedule.kind === "every" || job.schedule.kind === "cron"
+        ? { kind: "every", everyMs: 1, anchorMs: 0 }
+        : job.schedule,
+  });
+}
+
+/** Existing stored continuations predate the execution-only hash. Runtime writers only
+ * changed enablement; never accept a legacy mismatch in executable inputs. */
+export function cronOperatorSourceMatchesJob(job: CronStoredJob): boolean {
+  const revision = job.operatorSource?.executionRevision;
+  return (
+    revision !== undefined &&
+    (revision === resolveCronRequesterExecutionRevision(job) ||
+      revision === resolveLegacyCronRequesterExecutionRevision(job) ||
+      revision === resolveLegacyCronRequesterExecutionRevision({ ...job, enabled: !job.enabled }))
+  );
 }
 
 /** Executable edits cannot borrow the previous creator's authenticated source. */
@@ -116,7 +149,10 @@ export function reconcileCronOperatorSource(params: {
   const executionRevision = resolveCronRequesterExecutionRevision(job);
   if (
     source &&
-    (captured || previous?.executionRevision === executionRevision) &&
+    (captured ||
+      (previousJob &&
+        cronOperatorSourceMatchesJob(previousJob) &&
+        resolveCronRequesterExecutionRevision(previousJob) === executionRevision)) &&
     job.payload.kind === "agentTurn" &&
     policy?.mode === "account" &&
     job.owner?.sessionKey === source.sessionKey &&

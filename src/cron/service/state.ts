@@ -561,6 +561,7 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
+  | "operatorSource"
   | "toolsAllowProvenance"
   | "toolsAllowExecTarget"
   | "commitGuard"

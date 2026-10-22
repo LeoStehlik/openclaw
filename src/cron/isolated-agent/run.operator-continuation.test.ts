@@ -52,6 +52,7 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   getCurrentSessionControllerOwner,
   isSessionControllerWorkActive,
@@ -66,6 +67,7 @@ import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js"
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
 import { onTimer } from "../service/timer.test-support.js";
+import { saveCronStore } from "../store.js";
 import { readSessionMessagesAsyncMock } from "./run-automation.test-support.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
@@ -142,10 +144,15 @@ it.each([
   "role revoked during merge",
   "session replaced",
   "active recovery",
+  "queued owner payload edit",
+  "recurring trigger reload",
 ] as const)("scheduled continuation preserves the %s boundary", async (scenario) => {
   const restarting = scenario.startsWith("restart");
+  const queuedEdit = scenario === "queued owner payload edit";
+  const recurring = scenario === "recurring trigger reload";
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "github_publish"] },
+    ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
   const fixture = createCronFixture(undefined, config);
   const { context } = fixture;
@@ -206,8 +213,13 @@ it.each([
     sessionId: SESSION_ID,
     agentHarnessId: "openclaw",
   } as const;
+  const creatorReady = createDeferredCore();
+  const updateCreator = createDeferredCore();
+  const creatorUpdated = createDeferredCore();
+  const releaseCreator = createDeferredCore();
+  let creation: Promise<unknown> | undefined;
   try {
-    const create = () =>
+    const createRun = () =>
       inRun(
         "operator-creates-continuation",
         original ? admission("operator-creates-continuation", recovery.client) : undefined,
@@ -248,10 +260,16 @@ it.each([
                   job: {
                     name: "Finish authorized landing",
                     enabled: scenario !== "paused force run",
-                    schedule: {
-                      kind: "at",
-                      at: new Date(clock.clock.now() + 60_000).toISOString(),
-                    },
+                    schedule:
+                      recurring || scenario === "role revoked"
+                        ? { kind: "every", everyMs: 180_000 }
+                        : {
+                            kind: "at",
+                            at: new Date(clock.clock.now() + 60_000).toISOString(),
+                          },
+                    ...(recurring
+                      ? { trigger: { script: 'return { fire: true, message: "CI passed" };' } }
+                      : {}),
                     sessionTarget: "session:" + targetKey,
                     payload: {
                       kind: "agentTurn",
@@ -262,6 +280,20 @@ it.each([
                     deleteAfterRun: false,
                   },
                 });
+                if (queuedEdit) {
+                  const created = expectDefined((await fixture.read())[0], "created continuation");
+                  creatorReady.resolve();
+                  await updateCreator.promise;
+                  await automations.execute("refresh-continuation", {
+                    action: "update",
+                    jobId: created.id,
+                    job: {
+                      payload: { kind: "agentTurn", message: "Land the refreshed reviewed PR" },
+                    },
+                  });
+                  creatorUpdated.resolve();
+                  await releaseCreator.promise;
+                }
               },
             );
           } finally {
@@ -270,8 +302,10 @@ it.each([
         },
         original?.authority,
       );
+    const create = () =>
+      queuedEdit ? withSessionTurn(recovery.target, () => createRun()) : createRun();
     if (original) {
-      const creation = withPluginRuntimeGatewayRequestScope(
+      creation = withPluginRuntimeGatewayRequestScope(
         {
           client: recovery.client,
           context,
@@ -284,14 +318,20 @@ it.each([
         expect(await fixture.read()).toEqual([]);
         return;
       }
-      await creation;
+      if (queuedEdit) {
+        await Promise.race([creatorReady.promise, creation]);
+      } else {
+        await creation;
+      }
     } else {
       await create();
     }
   } finally {
-    original?.release();
-    fixture.context.cron.stop();
-    await creatorCron.waitForIdle();
+    if (!queuedEdit) {
+      original?.release();
+      fixture.context.cron.stop();
+      await creatorCron.waitForIdle();
+    }
   }
   if (scenario === "restart") {
     // The other restart cases retain the fixture's earlier operator source.
@@ -320,7 +360,7 @@ it.each([
   if (scenario === "foreign target") {
     expect(job.operatorSource).toBeUndefined();
   }
-  if (original) {
+  if (original && !queuedEdit) {
     expect(() => original.authority.assertCurrent()).toThrow();
   }
   if (scenario === "current tool deny") {
@@ -385,6 +425,9 @@ it.each([
   let rejected: string | undefined;
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
     entered++;
+    if (queuedEdit || recurring) {
+      expect(params.prompt).toContain(queuedEdit ? "Land the refreshed reviewed PR" : "CI passed");
+    }
     const admitted = await expectDefined(params.preparedRunAdmission, "scheduled admission").admit(
       "gateway",
       params.runId,
@@ -524,18 +567,51 @@ it.each([
         finished.resolve();
       }
     },
+    ...(recurring
+      ? {
+          evaluateCronTrigger: async () => ({
+            kind: "evaluated" as const,
+            fire: true,
+            message: "CI passed",
+          }),
+        }
+      : {}),
   });
   context.cron = execution;
   try {
     await execution.start();
     expect(entered).toBe(0);
     const reloaded = expectDefined(execution.getJob(job.id), "reloaded scheduled job");
+    if (recurring) {
+      await execution.update(job.id, { enabled: false });
+      await execution.update(job.id, {
+        enabled: true,
+        schedule: { kind: "every", everyMs: 240_000 },
+      });
+      execution.stop();
+      await execution.waitForIdle();
+      await execution.start();
+      expect(execution.getJob(job.id)?.operatorSource).toBeDefined();
+    }
     if (scenario === "paused force run") {
       expect(reloaded.enabled).toBe(false);
       await execution.run(job.id, "force");
     } else {
-      clock.setTime(expectDefined(reloaded.state.nextRunAtMs, "scheduled timer"));
+      clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "scheduled timer"));
       const tick = onTimer(schedulerState);
+      if (queuedEdit) {
+        await vi.waitFor(() => {
+          expect(execution.getJob(job.id)?.state.runningReceiptId).toEqual(expect.any(String));
+        });
+        expect(entered).toBe(0);
+        updateCreator.resolve();
+        await Promise.race([creatorUpdated.promise, expectDefined(creation, "creator turn")]);
+        expect(entered).toBe(0);
+        releaseCreator.resolve();
+        await creation;
+        original?.release();
+        await creatorCron.waitForIdle();
+      }
       if (restarting) {
         await restartEntered.promise;
         const harness = createAgentEventTestHarness();
@@ -587,6 +663,9 @@ it.each([
     await finished.promise;
     await execution.waitForIdle();
     const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
+    if (queuedEdit || recurring) {
+      expect(state.autoDisabled).toBeUndefined();
+    }
     if (restarting) {
       await shutdownReleased;
       expect(state.lastRunStatus, state.lastError).toBe("error");
@@ -657,6 +736,15 @@ it.each([
             ? /operator identity changed/i
             : /authority|source|conversation|session|role/i,
       );
+      if (scenario === "role revoked") {
+        expect(execution.getJob(job.id)?.enabled).toBe(false);
+        expect(state.nextRunAtMs).toBeUndefined();
+        expect(state.consecutiveErrors).toBe(1);
+        clock.setTime(clock.clock.now() + 3_600_000);
+        await onTimer(schedulerState);
+        await execution.waitForIdle();
+        expect(execution.getJob(job.id)?.state.consecutiveErrors).toBe(1);
+      }
       if (scenario === "active recovery") {
         expect(accessor.loadSessionEntry(recovery.target)).toMatchObject({
           restartRecoveryDeliveryRunId: recovery.target.recoveryRunId,
@@ -669,7 +757,7 @@ it.each([
         scenario === "role revoked during merge" ? "error" : "ok",
       );
       expect(entered).toBe(1);
-      if (scenario === "operator" || scenario === "paused force run") {
+      if (scenario === "operator" || scenario === "paused force run" || queuedEdit || recurring) {
         expect(JSON.stringify(offered)).toContain('"inspect"');
         expect(JSON.stringify(offered)).toContain("merge");
         expect(rejected).toBeUndefined();
@@ -704,13 +792,40 @@ it.each([
     if (
       scenario !== "operator" &&
       scenario !== "paused force run" &&
+      !queuedEdit &&
+      !recurring &&
       scenario !== "role revoked during merge"
     ) {
       expect(writes).toEqual([]);
       expect(github).not.toHaveBeenCalled();
       expect(receipt).not.toHaveBeenCalled();
     }
+    if (recurring) {
+      execution.stop();
+      await execution.waitForIdle();
+      const invalid = expectDefined((await fixture.read())[0], "stored continuation");
+      invalid.operatorSource = {
+        ...expectDefined(invalid.operatorSource, "stored operator source"),
+        executionRevision: "invalid-definition",
+      };
+      await saveCronStore(schedulerState.deps.storePath, { version: 1, jobs: [invalid] });
+      await execution.start();
+      clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "next occurrence"));
+      await onTimer(schedulerState);
+      await execution.waitForIdle();
+      expect(execution.getJob(job.id)).toMatchObject({
+        enabled: false,
+        state: { lastRunStatus: "error", consecutiveErrors: 1 },
+      });
+      expect(execution.getJob(job.id)?.state.lastError).toContain("definition changed");
+      expect(execution.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
+      expect(entered).toBe(1);
+    }
   } finally {
+    updateCreator.resolve();
+    releaseCreator.resolve();
+    await creation?.catch(() => {});
+    original?.release();
     restartContinue.resolve();
     execution.stop();
     await execution.waitForIdle();

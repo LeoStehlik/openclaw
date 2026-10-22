@@ -49,6 +49,7 @@ import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import {
   assertValidCronUpdatePatch,
+  captureCronCreatorSession,
   captureCronUpdatedInferenceBinding,
   cronRunQueuesBehindCaller,
   normalizeCronUpdateRequest,
@@ -158,6 +159,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         : callerScope && { ...callerScope, manageAll: undefined };
     let capture: ReturnType<typeof resolveCronCreatorAuthorityCapture>;
     let inference: Awaited<ReturnType<typeof captureCronUpdatedInferenceBinding>>;
+    let operatorCapture: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
     let streamExecPolicy: ReturnType<typeof resolveCronStreamExecPolicy>;
     let creatorSessionId: string | undefined;
     if (callerScope && !callerScope.manageAll && "agentId" in patch) {
@@ -233,6 +235,15 @@ export const cronHandlers: GatewayRequestHandlers = {
       const runtimeAuthority = capture?.captureRuntimeAuthority();
       capture &&= { ...capture, captureRuntimeAuthority: () => runtimeAuthority };
       const nextJob = await validateUpdate(currentJob);
+      if (creatorScope) {
+        operatorCapture = await captureCronCreatorSession(
+          nextJob,
+          creatorScope,
+          { client, context, signal },
+          cfg,
+          true,
+        );
+      }
       inference = runtimeAuthority
         ? undefined
         : await captureCronUpdatedInferenceBinding(nextJob, patch, cfg, {
@@ -249,11 +260,15 @@ export const cronHandlers: GatewayRequestHandlers = {
         sessionMutationCommitGuard?.();
         capture?.assertCurrent();
         inference?.assertInferenceSelectionCurrent();
+        operatorCapture?.assertOperatorSourceCurrent?.();
       },
       hasCurrentClientAuthority,
       modelJobPolicy: { config: cfg, jobId, patch },
     });
     const updateOptions: CronUpdateOptions = {
+      ...(operatorCapture?.operatorSource
+        ? { operatorSource: operatorCapture.operatorSource }
+        : {}),
       ...(touchesToolRuntime
         ? {
             scheduledToolPolicy:
