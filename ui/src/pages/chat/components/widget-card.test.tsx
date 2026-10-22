@@ -555,6 +555,9 @@ describe("widget-card", () => {
         title: "Could not pin to dashboard. Try again.",
       }),
     );
+    mountWidget({ ...preview, title: "Retained failure" }, { boardProvider: provider }, host);
+    expect(pinButton(host)).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
     button.click();
     await waitForSolid(() =>
       expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
@@ -562,7 +565,7 @@ describe("widget-card", () => {
     expect(pinWidget).toHaveBeenLastCalledWith({
       docId: "cv_pin_feedback",
       name: "canvas-cv_pin_feedback",
-      title: "Updated release status",
+      title: "Retained failure",
     });
     snapshot.set({ widgets: [{ name: "canvas-cv_pin_feedback" }] });
     retry.resolve();
@@ -576,10 +579,42 @@ describe("widget-card", () => {
     expect(button.hasAttribute("data-pinned")).toBe(false);
   });
 
+  it("announces a connected pin failure once across title updates", async () => {
+    const showToast = vi.spyOn(toast, "showToast").mockImplementation(() => true);
+    onTestFinished(() => showToast.mockRestore());
+    const completion = Promise.withResolvers<void>();
+    const { provider } = boardProvider({ pinWidget: () => completion.promise });
+    let setTitle!: (title: string) => void;
+    const root = mountSolid(() => {
+      const [title, updateTitle] = createSignal("Synthetic chart");
+      setTitle = updateTitle;
+      return (
+        <WidgetPinButton
+          target={{ board: provider, name: "chart", viewId: "chart", mcpApp: false }}
+          title={title()}
+        />
+      );
+    });
+    onTestFinished(root.unmount);
+    const button = pinButton(root.container)!;
+    button.click();
+    completion.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({
+      message: "Could not pin to dashboard. Try again.",
+    });
+    setTitle("Updated chart");
+    flush();
+    expect(pinButton(root.container)).toBe(button);
+    expect(button.title).toBe("Could not pin to dashboard. Try again.");
+    expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps pin failure feedback on the focused button without replaying its toast", async () => {
     const pending = Promise.withResolvers<void>();
     const { provider, snapshot } = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
     const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    onTestFinished(() => showToast.mockRestore());
     const host = connectedHost();
     const root = mountSolid(
       () => (

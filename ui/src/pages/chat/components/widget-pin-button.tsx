@@ -1,13 +1,5 @@
-import {
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  Errored,
-  Loading,
-  onSettled,
-  refresh,
-} from "solid-js";
+import { createErrorBoundary } from "@solidjs/signals";
+import { action, createMemo, createOptimistic, createSignal, refresh } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -32,25 +24,26 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
   );
   const [pinned, setPinned] = createOptimistic(() => ownerPinned().read());
   const [saving, setSaving] = createOptimistic(false);
-  const [receipt, setReceipt] = createSignal<Promise<void>>();
-  const settled = createMemo(() => receipt());
+  const [attempt, setAttempt] = createSignal<Promise<void> | undefined>(() => {
+    // Authoritative pin changes retire feedback from an earlier attempt.
+    ownerPinned().read();
+    return undefined;
+  });
   let admitted = false;
   let button!: HTMLButtonElement;
   const present = action(function* (completion: Promise<void>) {
     setSaving(true);
     setPinned(true);
-    yield completion;
-    yield refresh(pinned);
-  });
-  function PinFailure() {
-    onSettled(() => {
-      button.title = t("chat.toolCards.pinToDashboardFailed");
+    try {
+      yield completion;
+      yield refresh(pinned);
+    } catch (error) {
       if (button.isConnected) {
-        showToast({ message: button.title });
+        showToast({ message: t("chat.toolCards.pinToDashboardFailed") });
       }
-    });
-    return null;
-  }
+      throw error;
+    }
+  });
   const label = () =>
     t(
       saving()
@@ -59,6 +52,18 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
           ? "chat.toolCards.pinnedToDashboard"
           : "chat.toolCards.pinToDashboard",
     );
+  const failed = createMemo(() => {
+    const completion = attempt();
+    const outcome = createMemo(() => completion, { loadingValue: undefined });
+    // Only the native title's failure fact belongs to this boundary, not its optimistic label.
+    return createErrorBoundary(
+      () => {
+        outcome();
+        return false;
+      },
+      () => true,
+    );
+  });
   return (
     <button
       ref={(element) => (button = element)}
@@ -67,7 +72,9 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
       data-pin-widget
       disabled={saving() || pinned()}
       data-pinned={!saving() && pinned() ? "" : undefined}
-      title={label()}
+      title={
+        !saving() && !pinned() && failed()() ? t("chat.toolCards.pinToDashboardFailed") : label()
+      }
       aria-label={label()}
       onClick={() => {
         // Solid writes flush later; admission still prevents two same-task clicks.
@@ -82,17 +89,15 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
           ? target.board.pinMcpApp({ ...identity, viewId: target.viewId })
           : target.board.pinWidget({ ...identity, docId: target.viewId });
         const result = present(completion);
-        void setReceipt(result);
-        void result.then(
-          () => (admitted = false),
-          () => (admitted = false),
-        );
+        void setAttempt(result);
+        void result
+          .finally(() => {
+            admitted = false;
+          })
+          .catch(() => undefined);
       }}
     >
       <Icon name="pin" />
-      <Loading on={receipt()} fallback={null}>
-        <Errored fallback={<PinFailure />}>{(settled(), null)}</Errored>
-      </Loading>
     </button>
   );
 }
