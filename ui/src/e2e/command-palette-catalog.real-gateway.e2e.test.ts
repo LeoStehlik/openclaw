@@ -145,7 +145,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("opens Settings pickers from publication and recovers provider failures on Refresh", async () => {
+  it("opens Settings pickers from publication and acquires only on Refresh or Retry", async () => {
     const frames: unknown[] = [];
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
@@ -366,10 +366,10 @@ suite.define(() => {
           const failed = await catalogRefresh(() =>
             settings.getByRole("button", { name: "Refresh", exact: true }).click(),
           );
-          const unavailable = settings
-            .locator('[data-provider-id="ollama"]')
-            .getByText("Models unavailable", { exact: true });
-          await unavailable.waitFor({ state: "visible" });
+          const providerStatus = settings.locator(
+            '[data-provider-id="ollama"] .model-providers__head',
+          );
+          await expect.poll(() => providerStatus.textContent()).toContain("Models unavailable");
           expect(
             await settings.locator('.model-providers__catalog-progress[role="alert"]').count(),
           ).toBe(0);
@@ -386,22 +386,22 @@ suite.define(() => {
           });
           expect(await pickerValue(primary)).toBe("fixture/anchor");
           stages.push({ stage: "failed-refresh", acquisitions: acquisitions() });
-          await unavailable.scrollIntoViewIfNeeded();
+          await providerStatus.scrollIntoViewIfNeeded();
           await capture("settings-refresh-failed.png");
 
           providerMode = "ready";
           providerModel = "recovered-fixture:latest";
           acquisitionDiagnostics.trigger("refresh");
           await catalogRefresh(() => refreshButton.click());
-          await unavailable.waitFor({ state: "hidden" });
+          await expect.poll(() => providerStatus.textContent()).not.toContain("Models unavailable");
           await open();
           await primary
             .locator('[role="option"][data-value="ollama/recovered-fixture:latest"]')
             .waitFor({ state: "visible" });
           expect(acquisitions()).toBe(initialAcquisitions + 4);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "refresh-recovery", acquisitions: acquisitions() });
-          await capture("settings-refresh-recovered.png");
+          stages.push({ stage: "recovered-refresh", acquisitions: acquisitions() });
+          await capture("settings-retry.png");
         },
       );
     } catch (error) {
