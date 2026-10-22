@@ -4,6 +4,7 @@ import { Command } from "commander";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
+import { quoteCliArg } from "./quote-cli-arg.js";
 import {
   commandCalls,
   expectNoSideEffects,
@@ -295,12 +296,26 @@ describe("update-cli", () => {
   });
 
   it.each([{ capability: "sealed" }, { capability: "writable" }] as const)(
-    "refuses an incompatible service Node before staging ($capability)",
+    "preserves target compatibility for an unchanged service launcher ($capability)",
     async ({ capability }) => {
       const fixture = await f.setupServicePackageAtPrefix({
         prefix: f.tempDirs.make("preserved-runtime-"),
       });
       const serviceNode = fixture.serviceNode;
+      const replacementNode = path.join(f.tempDirs.make("replacement-runtime-"), "bin", "node");
+      await fs.mkdir(path.dirname(replacementNode), { recursive: true });
+      // Preserve the host runtime's dynamic-library paths when metadata probes execute it.
+      if (process.platform === "win32") {
+        await fs.copyFile(process.execPath, replacementNode);
+      } else {
+        await fs.writeFile(
+          replacementNode,
+          `#!/bin/sh\nexec ${quoteCliArg(process.execPath)} "$@"\n`,
+          {
+            mode: 0o755,
+          },
+        );
+      }
       f.mockPackageInstallStatus(fixture.root);
       mockRunningService([serviceNode, fixture.entrypoint, "gateway"], capability);
       f.primeNpmChannelTag("latest", "2026.7.1");
@@ -310,17 +325,17 @@ describe("update-cli", () => {
       mocks.nodeVersionSatisfiesEngine.mockImplementation(
         (version: string | null) => version === "26.12.1",
       );
-      mocks.resolveNodeRuntimeInfo.mockResolvedValue({
+      mocks.resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => ({
         status: "supported",
-        version: "24.20.0",
+        version: nodePath === replacementNode ? "26.12.1" : "24.20.0",
         sqliteVersion: "3.51.3",
         nodeSharedSqlite: false,
         sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
-      });
+      }));
       const recovery = await import("./update-cli/update-command-node-runtime-resolution.js");
       const recoverNode = vi
         .spyOn(recovery, "resolveTargetNodeRuntime")
-        .mockResolvedValue(undefined);
+        .mockResolvedValue(replacementNode);
       f.mockFileBackedPathExists();
       f.mockServicePackageCommands({
         nodeModules: fixture.nodeModules,
@@ -329,22 +344,34 @@ describe("update-cli", () => {
         npmCommands: ["npm", fixture.serviceNpm, requireValue(fixture.serviceNpmReal, "npm")],
         nodeVersions: {
           [serviceNode]: "v24.20.0",
+          [replacementNode]: "v26.12.1",
         },
+        onGatewayInstall: (argv) =>
+          f.primeServiceCommand([requireValue(argv[0], "Node"), fixture.entrypoint, "gateway"]),
       });
-      await expect(update.updateCommand({ yes: true, json: true, restart: true })).rejects.toEqual(
-        new update.ExitError(1),
-      );
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "error",
-        reason: "preflight-node-runtime-incompatible",
-      });
-      expect(getErrorOutput()).toContain(
-        `Required: openclaw@2026.7.1 Node >=26.12.1; detected: Node 24.20.0 at ${serviceNode}`,
-      );
-      expect(packageInstallCommandCall()).toBeUndefined();
-      expectNoSideEffects(recoverNode, mocks.serviceStop, update.doctorCommand);
-      expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
-      expect(await installedVersion(fixture.root)).toBe("2026.5.18");
+      if (capability !== "writable") {
+        await expect(
+          update.updateCommand({ yes: true, json: true, restart: true }),
+        ).rejects.toEqual(new update.ExitError(1));
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: "node-runtime-preflight",
+        });
+        expect(
+          commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g"),
+        ).toBeUndefined();
+        expectNoSideEffects(recoverNode, mocks.serviceStop);
+        expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
+        expect(await installedVersion(fixture.root)).toBe("2026.5.18");
+      } else {
+        await update.updateCommand({ yes: true, json: true, restart: true });
+        expect(commandCalls().find(([argv]) => argv[1] === "i" && argv[2] === "-g")).toBeDefined();
+        expect(lastWriteJsonCall()).toMatchObject({ status: "ok" });
+        expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(
+          replacementNode,
+        );
+        expect(recoverNode).toHaveBeenCalledOnce();
+      }
     },
   );
 });
