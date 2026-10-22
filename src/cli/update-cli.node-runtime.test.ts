@@ -351,7 +351,7 @@ describe("update-cli", () => {
     },
   );
 
-  it("refreshes the managed service to current Node when its baked Node cannot run the target", async () => {
+  it("refuses incompatible service Node even when the shell Node can run the target", async () => {
     const servicePrefix = tempDirs.make("openclaw-service-prefix-");
     const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
       await setupServicePackageAtPrefix({ prefix: servicePrefix });
@@ -392,14 +392,27 @@ describe("update-cli", () => {
       nodeVersions: { [serviceNode]: "v24.14.0", [process.execPath]: "v24.15.0" },
     });
 
-    await updateCommand({ yes: true });
+    await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
 
-    const logs = getLogOutput();
-    expect(logs).toContain(`Managed gateway service Node (${serviceNode}) cannot run`);
-    expect(logs).toContain(`Using compatible Node (${process.execPath})`);
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "preflight-node-runtime-incompatible",
+    });
+    expect(getErrorOutput()).toContain(
+      `Required: openclaw@2026.7.1 Node >=24.15.0 <25; detected: Node 24.14.0 at ${serviceNode}`,
+    );
+    expect(getErrorOutput()).toContain(
+      "changing the shell's Node alone does not update the service",
+    );
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expectNoSideEffects(serviceStop, serviceRestart);
+    expect((await serviceReadCommand(process.env))?.programArguments[0]).toBe(serviceNode);
+    expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8")).version).toBe(
+      "2026.5.18",
+    );
   });
 
-  it("keeps the CLI and service reachable after nvm runtime recovery", async () => {
+  it("preserves the CLI path and gives nvm recovery before staging", async () => {
     resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
     const { root, serviceNode, entrypoint } = await setupServicePackageAtPrefix({
       prefix: path.join(tempDirs.make("runtime-recovery-"), ".nvm/versions/node/v22.18.0"),
@@ -420,19 +433,28 @@ describe("update-cli", () => {
       new ExitError(1),
     );
 
+    const recoverySteps = runtimeRecovery.expectedRuntimeRecoverySteps(
+      "24.22.1",
+      root,
+      "2026.5.20",
+    );
+    recoverySteps[1] = {
+      kind: "select-runtime",
+      command: runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.22.1"),
+    };
     expect(lastWriteJsonCall()).toMatchObject({
-      reason: "node-runtime-preflight",
+      reason: "preflight-node-runtime-incompatible",
       failedStep: {
-        recoverySteps: runtimeRecovery.expectedManagedRuntimeRecoverySteps("nvm", root),
+        recoverySteps,
       },
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(serviceStop).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
+    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining(
-        `Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.22.1", "refresh", undefined, root).replace("3. Install and select Node 24.22.1 using your system package manager or https://nodejs.org/en/download.", `3. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.22.1")}\`.`)}`,
+        `Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.22.1", "absent", undefined, root).replace("2. Install and select Node 24.22.1 using your system package manager or https://nodejs.org/en/download.", `2. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.22.1")}\`.`)}`,
       ),
     );
   });

@@ -7,36 +7,40 @@ import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 it.each(
   ["repair", "finalize"].flatMap((command) =>
-    ["parent", "leaf", "human"].map((format) => ({ command, format })),
+    ["parent", "leaf", "human"].flatMap((format) =>
+      ["", "unrecognized-channel"].map((channel) => ({ command, format, channel })),
+    ),
   ),
-)("reports invalid $command channels in $format output", async ({ command, format }) => {
-  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-    await state.writeConfig({ update: { channel: "stable" } });
-    const before = await fs.readFile(state.configPath, "utf8");
-    const result = await runCliProcessChild({
-      nodeArgs: [
-        ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
-        "update",
-        ...(format === "parent" ? ["--json"] : []),
-        command,
-        "--channel",
-        "unrecognized-channel",
-        ...(format === "leaf" ? ["--json"] : []),
-      ],
-      env: { ...process.env, ...state.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
-    });
-    const message =
-      '--channel must be "stable", "extended-stable", "beta", or "dev" (got "unrecognized-channel")';
-    expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
-    expect(result.stderr.trim()).toBe(message);
-    if (format === "human") {
-      expect(result.stdout).toBe("");
-    } else {
-      expect(JSON.parse(result.stdout)).toEqual({
-        ok: false,
-        error: { type: "cli_error", message },
+)(
+  "reports invalid $command channel '$channel' in $format output",
+  async ({ command, format, channel }) => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      await state.writeConfig({ update: { channel: "stable" } });
+      const before = await fs.readFile(state.configPath, "utf8");
+      const result = await runCliProcessChild({
+        nodeArgs: [
+          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+          "update",
+          ...(format === "parent" ? ["--json"] : []),
+          command,
+          "--channel",
+          channel,
+          ...(format === "leaf" ? ["--json"] : []),
+        ],
+        env: { ...process.env, ...state.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
       });
-    }
-    expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
-  });
-});
+      const message = `--channel must be "stable", "extended-stable", "beta", or "dev" (got ${JSON.stringify(channel)})`;
+      expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
+      expect(result.stderr.trim()).toBe(message);
+      if (format === "human") {
+        expect(result.stdout).toBe("");
+      } else {
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+        });
+      }
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+    });
+  },
+);
