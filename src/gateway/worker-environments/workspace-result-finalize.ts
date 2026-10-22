@@ -176,10 +176,13 @@ export async function reconcileWorkspaceAfterTurn(params: {
     }
     return currentPlacement;
   };
-  const assertResultCurrent = () => {
+  const assertWorkspaceResultCurrent = () => {
     if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
       throw new Error("Cloud worker workspace result lost its placement owner");
     }
+  };
+  const assertResultCurrent = () => {
+    assertWorkspaceResultCurrent();
     resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
   };
   await params.placements.prepareWorkspaceResultClaim(params.turnClaim);
@@ -192,11 +195,6 @@ export async function reconcileWorkspaceAfterTurn(params: {
   if (!params.placements.preparedWorkspaceResult(params.turnClaim)) {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
-  const assertWorkspaceResultCurrent = () => {
-    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
-      throw new Error("Cloud worker workspace result lost its placement owner");
-    }
-  };
   const journal = createWorkspaceResultJournal({
     placement: currentPlacement,
     placements: params.placements,
