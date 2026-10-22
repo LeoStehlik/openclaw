@@ -1,20 +1,12 @@
 // Gateway HTTP server listen helper with retry and lock-aware errors.
+import { once } from "node:events";
 import type { Server as HttpServer } from "node:http";
+import { promisify } from "node:util";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 
 const EADDRINUSE_MAX_RETRIES = 20;
 const EADDRINUSE_RETRY_INTERVAL_MS = 500;
-
-async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
-  await new Promise<void>((resolve) => {
-    try {
-      httpServer.close(() => resolve());
-    } catch {
-      resolve();
-    }
-  });
-}
 
 /** Listen on the configured gateway host/port, retrying transient EADDRINUSE windows. */
 export async function listenGatewayHttpServer(params: {
@@ -37,31 +29,13 @@ export async function listenGatewayHttpServer(params: {
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      await new Promise<void>((resolve, reject) => {
-        const onError = (err: NodeJS.ErrnoException) => {
-          httpServer.off("listening", onListening);
-          reject(err);
-        };
-        const onListening = () => {
-          httpServer.off("error", onError);
-          resolve();
-        };
-        httpServer.once("error", onError);
-        httpServer.once("listening", onListening);
-        try {
-          httpServer.listen(port, bindHost);
-        } catch (error) {
-          httpServer.off("error", onError);
-          httpServer.off("listening", onListening);
-          throw error;
-        }
-      });
+      await once(httpServer.listen(port, bindHost), "listening");
       return;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === "EADDRINUSE" && attempt < maxRetries) {
         // Port may still be in TIME_WAIT after a recent process exit; retry.
-        await closeServerQuietly(httpServer);
+        await promisify(httpServer.close.bind(httpServer))().catch(() => {});
         await sleep(EADDRINUSE_RETRY_INTERVAL_MS);
         continue;
       }
