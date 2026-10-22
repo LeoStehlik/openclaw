@@ -115,7 +115,7 @@ it("keeps the raw Save command busy until its owner settles", async () => {
 it.each(["Open", "Discard"])(
   "locks raw controls during %s without showing Saving",
   async (label) => {
-    const completion = createDeferred<boolean>();
+    const completion = createDeferred<void>();
     const command = vi.fn(() => completion.promise);
     const { container } = renderConfigView({
       formMode: "raw",
@@ -133,7 +133,7 @@ it.each(["Open", "Discard"])(
     expect(save.textContent?.trim()).toBe("Save");
     expect(save.getAttribute("aria-busy")).toBe("false");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
-    completion.resolve(true);
+    completion.resolve();
     await waitForSolid(() => expect(buttons.every((button) => !button.disabled)).toBe(true));
     expect(command).toHaveBeenCalledOnce();
   },
