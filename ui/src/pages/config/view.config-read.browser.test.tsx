@@ -115,7 +115,7 @@ it("keeps the raw Save command busy until its owner settles", async () => {
 it.each(["Open", "Discard"])(
   "locks raw controls during %s without showing Saving",
   async (label) => {
-    const completion = createDeferred<void>();
+    const completion = createDeferred();
     const command = vi.fn(() => completion.promise);
     const { container } = renderConfigView({
       formMode: "raw",
