@@ -1,5 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import {
+  buildAcpDatabaseSessionKey,
+  readPublishedAcpSessionRows,
+} from "../acp/runtime/session-meta-keys.js";
+import { rowToAcpSessionMeta } from "../acp/runtime/session-meta-readonly.js";
+import {
   readSessionRuntimeOwnershipAsync,
   SessionRuntimeOwnershipChanged,
 } from "../agents/harness/session-runtime-ownership.js";
@@ -8,10 +13,12 @@ import { captureSessionStoreReadCandidate } from "../config/sessions/session-sto
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { capturePluginStateReadDependencies } from "../plugin-state/plugin-state-publication.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
@@ -24,7 +31,6 @@ import {
   type PreparedSessionRowDatabaseFacts,
   type Row,
 } from "./session-row-projection-record.js";
-import { prepareSessionRowSharedFacts } from "./session-row-projection-shared-facts.js";
 
 /** Worker read owners retain each physical source through current row-facts installation. */
 export async function withSessionRowDatabaseFacts(
@@ -165,9 +171,79 @@ export async function withSessionRowDatabaseFacts(
             }
           }
         }
-        const sharedRead = prepareSessionRowSharedFacts({ rows, facts, env, shared });
-        if (sharedRead) {
-          sharedRead.accept(await sharedRead.reply);
+        const databasePath = resolveOpenClawStateSqlitePath(env);
+        const sharedRows = rows.flatMap((row) => {
+          const prepared = facts.get(identity(row));
+          if (!prepared) {
+            return [];
+          }
+          if (!prepared.entry) {
+            prepared.acpMeta = null;
+          }
+          if (prepared.acpMeta === undefined) {
+            const published = readPublishedAcpSessionRows(databasePath, [
+              {
+                keys: [buildAcpDatabaseSessionKey(normalizeStoreSessionKey(row.key), row.agentId)],
+                entry: prepared.entry,
+              },
+            ]);
+            if (published) {
+              prepared.acpMeta = published[0] ? rowToAcpSessionMeta(published[0]) : null;
+            }
+          }
+          if (!prepared.entry?.repositoryWorkspaceId) {
+            prepared.repositoryWorkspace = null;
+          }
+          return prepared.acpMeta !== undefined && prepared.repositoryWorkspace !== undefined
+            ? []
+            : [{ row, prepared }];
+        });
+        if (sharedRows.length) {
+          const reply = await executeExistingOpenClawStateRead(
+            { env, path: databasePath },
+            {
+              type: "sessionRows.sharedFacts",
+              entries: sharedRows.map(({ row, prepared }) => ({
+                ...(prepared.acpMeta === undefined
+                  ? {
+                      acp: {
+                        keys: [
+                          buildAcpDatabaseSessionKey(
+                            normalizeStoreSessionKey(row.key),
+                            row.agentId,
+                          ),
+                        ],
+                        entry: {
+                          sessionId: prepared.entry?.sessionId,
+                          lifecycleRevision: prepared.entry?.lifecycleRevision,
+                          sessionStartedAt: prepared.entry?.sessionStartedAt,
+                        },
+                      },
+                    }
+                  : {}),
+                ...(prepared.repositoryWorkspace === undefined &&
+                prepared.entry?.repositoryWorkspaceId
+                  ? {
+                      repositoryWorkspace: {
+                        agentId: row.agentId,
+                        sessionKey: row.key,
+                        workspaceId: prepared.entry.repositoryWorkspaceId,
+                      },
+                    }
+                  : {}),
+              })),
+            },
+            { context: shared },
+          );
+          for (const [index, { prepared }] of sharedRows.entries()) {
+            const sharedFacts = reply?.rows[index];
+            if (prepared.acpMeta === undefined) {
+              prepared.acpMeta = sharedFacts?.acp ? rowToAcpSessionMeta(sharedFacts.acp) : null;
+            }
+            if (prepared.repositoryWorkspace === undefined) {
+              prepared.repositoryWorkspace = sharedFacts?.repositoryWorkspace ?? null;
+            }
+          }
         }
         for (const row of rows) {
           const prepared = facts.get(identity(row));
@@ -208,7 +284,9 @@ export async function withSessionRowDatabaseFacts(
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
-        sharedRead?.assertCurrent();
+        if (sharedRows.length) {
+          shared.admission.assertCurrent();
+        }
         if (owner.isActive()) {
           const currentIds = rows
             .filter(
