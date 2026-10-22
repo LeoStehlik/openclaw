@@ -17,7 +17,7 @@ import {
 } from "./user-profile-mutation.js";
 import { userProfilesDb } from "./user-profiles-internal.js";
 import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
-import { normalizeInitialDisplayName } from "./user-profiles.js";
+import { normalizeInitialDisplayName, writeUserProfileDisplayName } from "./user-profiles.js";
 
 /** Only current authenticated Enterprise GitHub metadata can establish this host-scoped credit binding. */
 function applyEnterpriseGitHubIdentity(
@@ -133,15 +133,7 @@ export function ensureEnterpriseGitHubProfile(
       const adoptsName = Boolean(displayName && profile.displayName === principal);
       if (adoptsName) {
         options.mutation?.before(db, profile.id);
-        executeSqliteQuerySync(
-          db,
-          userProfilesDb(db)
-            .updateTable("user_profiles")
-            .set({ display_name: displayName, updated_at: now })
-            .where("id", "=", profile.id),
-        );
-        options.mutation?.publish(profile.id);
-        publishUserProfilesChange(db, profile.id);
+        writeUserProfileDisplayName(db, profile.id, displayName, now, options);
       }
       const identityUpdatedAt = applyEnterpriseGitHubIdentity(db, {
         profileId: profile.id,

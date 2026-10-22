@@ -55,7 +55,7 @@ import {
   UserProfileNotFoundError,
   UserProfileOwnerError,
 } from "./user-profiles-schema.js";
-import { normalizeInitialDisplayName } from "./user-profiles.js";
+import { normalizeInitialDisplayName, writeUserProfileDisplayName } from "./user-profiles.js";
 import type {
   ProfileDisplayRow,
   UserProfileEmailBinding,
@@ -514,15 +514,7 @@ export function syncGitHubIdentity(
         return profile;
       }
       options.mutation?.before(db, profile.id);
-      executeSqliteQuerySync(
-        db,
-        userProfilesDb(db)
-          .updateTable("user_profiles")
-          .set({ display_name: displayName, updated_at: now })
-          .where("id", "=", profile.id),
-      );
-      options.mutation?.publish(profile.id);
-      publishUserProfilesChange(db, profile.id);
+      writeUserProfileDisplayName(db, profile.id, displayName, now, options);
       return { ...profile, displayName, updatedAt: now };
     },
     options,
