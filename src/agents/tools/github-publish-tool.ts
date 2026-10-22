@@ -16,7 +16,6 @@ import {
   GitHubPublicationTitleSchema,
   type GitHubPublicationAction,
   type SessionGitHubActionResult,
-  type SessionGitHubActionParams,
   type SessionGitHubPublicationResult,
   type SessionGitHubPublishParams,
 } from "../../../packages/gateway-protocol/src/schema/session-github-publication.js";
@@ -217,15 +216,6 @@ export function createGitHubPublishTool(
             "prepare_pr accepts this PR's URL and its returned conflict acknowledgement for the current workspace.",
           );
         }
-        const prepareParams: SessionGitHubActionParams = {
-          sessionKey: caller.sessionKey,
-          action: "prepare_pr",
-          pullRequestUrl: input.pullRequestUrl,
-          ...(input.conflictsResolved !== undefined
-            ? { conflictsResolved: input.conflictsResolved }
-            : {}),
-          ...(input.expectedHeadCommit ? { expectedHeadCommit: input.expectedHeadCommit } : {}),
-        };
         if (adopting && options.sandbox) {
           const { handoffSessionTool } = await import("./session-tool-handoff.js");
           const sandbox = options.sandbox;
@@ -249,7 +239,17 @@ export function createGitHubPublishTool(
                 () =>
                   callAgentToolGatewayRequest({
                     method: "sessions.github.action",
-                    params: prepareParams,
+                    params: {
+                      sessionKey: caller.sessionKey,
+                      action: "prepare_pr",
+                      pullRequestUrl: input.pullRequestUrl,
+                      ...(input.conflictsResolved !== undefined
+                        ? { conflictsResolved: input.conflictsResolved }
+                        : {}),
+                      ...(input.expectedHeadCommit
+                        ? { expectedHeadCommit: input.expectedHeadCommit }
+                        : {}),
+                    },
                     sessionMutationCommitGuard: assertCurrent,
                     signal: handoffSignal,
                     timeoutMs: null,
@@ -281,7 +281,17 @@ export function createGitHubPublishTool(
             () =>
               callGateway<SessionGitHubPullRequestPrepareResult>(
                 "sessions.github.action",
-                prepareParams,
+                {
+                  sessionKey: caller.sessionKey,
+                  action: "prepare_pr",
+                  pullRequestUrl: input.pullRequestUrl,
+                  ...(input.conflictsResolved !== undefined
+                    ? { conflictsResolved: input.conflictsResolved }
+                    : {}),
+                  ...(input.expectedHeadCommit
+                    ? { expectedHeadCommit: input.expectedHeadCommit }
+                    : {}),
+                },
                 { timeoutMs: 600_000 },
               ),
           ),

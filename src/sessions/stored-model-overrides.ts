@@ -72,19 +72,10 @@ export function resolveDirectStoredModelOverride(
   });
 }
 
-function prepareStoredModelOverride(
-  params: Parameters<typeof resolveDirectStoredModelOverride>[0] & {
-    sessionKey?: string;
-    parentSessionKey?: string;
-  },
-): StoredModelOverride | string | null {
-  if (params.sessionEntry?.modelOverrideSource === "default") {
-    return null;
-  }
-  const direct = resolveDirectStoredModelOverride(params);
-  if (direct) {
-    return direct;
-  }
+function resolveParentSessionKeyCandidate(params: {
+  sessionKey?: string;
+  parentSessionKey?: string;
+}): string | null {
   const explicit = normalizeOptionalString(params.parentSessionKey);
   if (explicit && explicit !== params.sessionKey) {
     return explicit;
@@ -130,12 +121,19 @@ export async function resolveStoredModelOverrideAsync(
     ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
   },
 ): Promise<StoredModelOverride | null> {
-  const prepared = prepareStoredModelOverride(params);
-  if (typeof prepared !== "string") {
-    return prepared;
+  if (params.sessionEntry?.modelOverrideSource === "default") {
+    return null;
+  }
+  const direct = resolveDirectStoredModelOverride(params);
+  if (direct) {
+    return direct;
+  }
+  const parentKey = resolveParentSessionKeyCandidate(params);
+  if (!parentKey) {
+    return null;
   }
   const parentEntry =
-    (await params.loadSessionEntry?.(prepared)) ?? params.sessionStore?.[prepared];
+    (await params.loadSessionEntry?.(parentKey)) ?? params.sessionStore?.[parentKey];
   return resolveParentStoredModelOverride(params, parentEntry);
 }
 
@@ -143,11 +141,18 @@ export async function resolveStoredModelOverrideAsync(
 export function resolveStoredModelOverrideCore(
   params: Parameters<typeof resolveStoredModelOverride>[0] & ModelManifestNormalizationContext,
 ): StoredModelOverride | null {
-  const prepared = prepareStoredModelOverride(params);
-  if (typeof prepared !== "string") {
-    return prepared;
+  if (params.sessionEntry?.modelOverrideSource === "default") {
+    return null;
   }
-  const parentEntry = params.loadSessionEntry?.(prepared) ?? params.sessionStore?.[prepared];
+  const direct = resolveDirectStoredModelOverride(params);
+  if (direct) {
+    return direct;
+  }
+  const parentKey = resolveParentSessionKeyCandidate(params);
+  if (!parentKey) {
+    return null;
+  }
+  const parentEntry = params.loadSessionEntry?.(parentKey) ?? params.sessionStore?.[parentKey];
   return resolveParentStoredModelOverride(params, parentEntry);
 }
 

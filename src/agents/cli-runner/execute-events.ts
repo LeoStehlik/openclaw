@@ -381,15 +381,15 @@ export function createCliEventHandlers(params: {
       });
     }
   };
-  const transformOutput = (text: string) =>
-    applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output);
-
   const emitCliCommentaryText = (text: string) => {
     if (!emitLiveEvents || params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
     }
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
-    const visibleText = transformOutput(prepared.text);
+    const visibleText = applyPluginTextReplacements(
+      prepared.text,
+      context.backendResolved.textTransforms?.output,
+    );
     if (!visibleText) {
       return;
     }
@@ -427,11 +427,17 @@ export function createCliEventHandlers(params: {
       ? sourceText.slice(assistantVisibleText.length)
       : sourceText;
     assistantVisibleText = sourceText;
-    const preparedText = transformOutput(sourceText);
+    const preparedText = applyPluginTextReplacements(
+      sourceText,
+      context.backendResolved.textTransforms?.output,
+    );
     emitLiveEvent("assistant", () => ({
       itemId: cliAssistantItemId(runParams.runId),
       text: preparedText,
-      delta: transformOutput(sourceDelta),
+      delta: applyPluginTextReplacements(
+        sourceDelta,
+        context.backendResolved.textTransforms?.output,
+      ),
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
@@ -444,7 +450,10 @@ export function createCliEventHandlers(params: {
     }
     assistantVisibleText = "";
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
-    const visibleText = transformOutput(prepared.text);
+    const visibleText = applyPluginTextReplacements(
+      prepared.text,
+      context.backendResolved.textTransforms?.output,
+    );
     if (!visibleText) {
       return;
     }
