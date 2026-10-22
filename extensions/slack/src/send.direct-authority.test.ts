@@ -173,7 +173,9 @@ describe("Slack direct-delivery request authority", () => {
       (url, attempt) =>
         url === "/api/conversations.open"
           ? { ok: true, channel: { id: "D123" } }
-          : { ok: true, ts: `${attempt}.1`, channel: "D123" },
+          : url === "/api/conversations.history"
+            ? { ok: true, messages: [{ ts: "171234.1" }] }
+            : { ok: true, ts: `${attempt}.1`, channel: "D123" },
       async (cfg, paths) => {
         const options = {
           cfg,
@@ -184,7 +186,9 @@ describe("Slack direct-delivery request authority", () => {
         await sendMessageSlack("user:U123", "second", options);
         expect(paths).toEqual([
           "/api/conversations.open",
+          "/api/conversations.history",
           "/api/chat.postMessage",
+          "/api/conversations.history",
           "/api/chat.postMessage",
         ]);
       },

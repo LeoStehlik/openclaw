@@ -48,6 +48,13 @@ const ENTERPRISE_CFG = { channels: { slack: {} } };
 
 function createEnterpriseClient(): EnterpriseTestClient {
   return {
+    conversations: {
+      history: vi.fn(async ({ latest }: { latest: string }) => ({
+        ok: true,
+        messages: [{ ts: latest, type: "message" }],
+      })),
+      replies: vi.fn(async () => ({ ok: true, messages: [] })),
+    },
     chat: {
       postMessage: vi.fn(async () => ({ ok: true, ts: "123.456", channel: "C123" })),
     },

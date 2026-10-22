@@ -34,7 +34,10 @@ function createClient(): TestClient {
       postMessage: vi.fn<Post>(async () => ({ ok: true, channel: "C123", ts, message: {} })),
     },
     conversations: {
-      history: vi.fn<Lookup>(async () => ({ messages: [] })),
+      history: vi.fn<Lookup>(async ({ oldest, latest }) => ({
+        ok: true,
+        messages: oldest === latest && latest ? [{ ts: latest }] : [],
+      })),
       open: vi.fn<Lookup>(async () => ({ channel: { id: "D123" } })),
       replies: vi.fn<Lookup>(async () => ({ messages: [] })),
     },

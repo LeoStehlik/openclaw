@@ -70,7 +70,7 @@ const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type ApiMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 type UploadTestClient = WebClient & {
-  conversations: { open: ApiMock };
+  conversations: { open: ApiMock; history: ApiMock; replies: ApiMock };
   chat: { postMessage: ApiMock };
   files: {
     getUploadURLExternal: ApiMock;
@@ -82,6 +82,11 @@ function createUploadTestClient(slackApiUrl = "https://slack.com/api/"): UploadT
   return {
     slackApiUrl,
     conversations: {
+      history: vi.fn(async ({ latest }: { latest: string }) => ({
+        ok: true,
+        messages: [{ ts: latest, type: "message" }],
+      })),
+      replies: vi.fn(async () => ({ ok: true, messages: [] })),
       open: vi.fn(async () => ({ channel: { id: "D99RESOLVED" } })),
     },
     chat: {
@@ -160,6 +165,22 @@ describe("sendMessageSlack file upload with user IDs", () => {
     globalThis.fetch = originalFetch;
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+  });
+
+  it("does not share an attachment when its reply parent is deleted", async () => {
+    // Deletion during transfer must stop the final publish, not upload top-level.
+    globalThis.fetch = vi.fn(async () => {
+      client.conversations.history.mockResolvedValue({ ok: true, messages: [] });
+      return new Response("ok");
+    });
+    await expect(
+      sendUpload(client, { threadTs: "171.222", mediaUrl: "https://example.com/image.png" }),
+    ).rejects.toMatchObject({
+      name: "PlatformMessageNotDispatchedError",
+      retryable: false,
+    });
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 
   it("records an accepted batched upload when its remaining caption post fails", async () => {

@@ -190,6 +190,50 @@ describe("sendMessageSlack chunking", () => {
   });
 });
 
+describe("sendMessageSlack reply parent", () => {
+  it.each([{ messages: [] }, { messages: [{ ts: "171234.100", subtype: "tombstone" }] }])(
+    "stops a reply to a missing/deleted parent without dispatch or fallback (%j)",
+    async ({ messages }) => {
+      client.conversations.history.mockResolvedValue({ ok: true, messages });
+      const onPlatformSendDispatch = vi.fn();
+      await expect(
+        send("hello", { threadTs: "171234.100", onPlatformSendDispatch }),
+      ).rejects.toMatchObject({
+        name: "PlatformMessageNotDispatchedError",
+        retryable: false,
+      });
+      expect(client.chat.postMessage).not.toHaveBeenCalled();
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed on lookup failure, without changing the destination", async () => {
+    client.conversations.history.mockRejectedValue(new Error("missing_scope"));
+    await expect(send("hello", { threadTs: "171234.100" })).rejects.toThrow("Could not verify");
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("does no parent reads for top-level sends and one for a multi-part reply", async () => {
+    await send("hello");
+    expect(client.conversations.history).not.toHaveBeenCalled();
+    await send("a".repeat(8500), { threadTs: "171234.100" });
+    expect(client.conversations.history).toHaveBeenCalledTimes(1);
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+  });
+
+  it("accepts a child target only while its root still exists", async () => {
+    client.conversations.replies.mockResolvedValue({ ok: true, messages: [{ ts: "171234.099" }] });
+    client.conversations.history
+      .mockResolvedValueOnce({ ok: true, messages: [] })
+      .mockResolvedValueOnce({ ok: true, messages: [{ ts: "171234.099" }] });
+    await send("hello", { threadTs: "171234.100" });
+    expect(postedMessage().thread_ts).toBe("171234.100");
+    client.conversations.history.mockResolvedValue({ ok: true, messages: [] });
+    await expect(send("hello", { threadTs: "171234.100" })).rejects.toThrow("missing or deleted");
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("sendMessageSlack blocks", () => {
   it("marks only the fallback card that actually contains the question controls", async () => {
     let messageCount = 0;

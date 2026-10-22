@@ -11,6 +11,8 @@ type SlackEditTestClient = WebClient & {
 type SlackSendTestClient = WebClient & {
   conversations: {
     open: ReturnType<typeof vi.fn>;
+    history: ReturnType<typeof vi.fn>;
+    replies: ReturnType<typeof vi.fn>;
   };
   chat: {
     postMessage: ReturnType<typeof vi.fn>;
@@ -46,6 +48,11 @@ export function createSlackEditTestClient(): SlackEditTestClient {
 export function createSlackSendTestClient(): SlackSendTestClient {
   return {
     conversations: {
+      history: vi.fn(async ({ latest }: { latest: string }) => ({
+        ok: true,
+        messages: [{ ts: latest, type: "message" }],
+      })),
+      replies: vi.fn(async () => ({ ok: true, messages: [] })),
       open: vi.fn(async () => ({ channel: { id: "D123" } })),
     },
     chat: {
