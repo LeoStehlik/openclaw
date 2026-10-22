@@ -18,7 +18,7 @@ import {
   type LocalWorkspaceManifestNode,
   type LocalWorkspaceManifestRecord,
 } from "./local-workspace-manifest-tree.js";
-import type { LocalWorkspaceMutation } from "./local-workspace-store.kernel.js";
+import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 import { scanActualWorkspaceManifest } from "./workspace-actual-manifest.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
 import {

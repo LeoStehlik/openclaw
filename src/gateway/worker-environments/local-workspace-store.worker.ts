@@ -7,10 +7,8 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
 import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import type { WorkerOperationContext } from "../../state/worker-operation-registry.js";
-import {
-  mutateLocalWorkspaceProjection,
-  type LocalWorkspaceMutation,
-} from "./local-workspace-store.kernel.js";
+import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
+import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
 
 export const localWorkspaceOperations = {
   "localWorkspace.mutate": (

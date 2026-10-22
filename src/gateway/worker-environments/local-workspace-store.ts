@@ -26,9 +26,9 @@ import type {
   LocalWorkspaceManifestMutation,
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
-} from "./local-workspace-store.kernel.js";
+} from "./local-workspace-store.types.js";
 
-export type { LocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
+export type { LocalWorkspaceProjection } from "./local-workspace-store.types.js";
 
 const compressMutation = promisify(deflateRaw);
 
