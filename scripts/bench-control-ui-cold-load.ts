@@ -1500,8 +1500,17 @@ try {
         deltas: number;
         milliseconds: Record<string, number>;
       }> = [];
+      const streamingTrace: unknown[] = [];
+      collectedTrace = streamingTrace;
       if (cpuProfile) {
         await cdp.send("Profiler.start");
+      }
+      if (traced) {
+        await cdp.send("Tracing.start", {
+          categories:
+            "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline.stack,v8",
+          transferMode: "ReportEvents",
+        });
       }
       if (values["streaming-allocations"]) {
         await cdp.send("HeapProfiler.startSampling", {
@@ -1581,6 +1590,17 @@ try {
       }
       if (cpuProfile) {
         await recordCpu("streaming", (await cdp.send("Profiler.stop")).profile);
+      }
+      if (traced) {
+        const complete = new Promise<void>((resolve) => {
+          cdp.once("Tracing.tracingComplete", () => resolve());
+        });
+        await cdp.send("Tracing.end");
+        await complete;
+        await writeFile(
+          path.join(artifactDir, `run-${run + 1}.streaming.trace.json`),
+          JSON.stringify({ traceEvents: streamingTrace }),
+        );
       }
       streaming = {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),

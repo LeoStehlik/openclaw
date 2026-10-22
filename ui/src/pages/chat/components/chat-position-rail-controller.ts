@@ -571,7 +571,9 @@ export function createPositionRail(props: PositionRailParams) {
       }
       markersChanged = true;
     }
-    if (!refreshingWindow) {
+    // Text-only previews retain the rail geometry. Native resize/scroll and
+    // transcript observations already request measurements when it changes.
+    if (!refreshingWindow && markersChanged) {
       requestObservation();
     }
     const indexes = windowIndexes();
