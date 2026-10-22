@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { once } from "node:events";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
@@ -543,13 +544,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", () => {
-      httpServer.removeListener("error", reject);
-      resolve();
-    });
-  });
+  await once(httpServer.listen(0, "127.0.0.1"), "listening");
 
   const address = httpServer.address();
   if (!address || typeof address === "string") {

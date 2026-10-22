@@ -1,4 +1,5 @@
 import { randomBytes, timingSafeEqual, X509Certificate } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import {
   createServer as createHttpServer,
@@ -647,13 +648,7 @@ export async function startSecretEgressProxyServer(params: {
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    proxy.once("error", reject);
-    proxy.listen(0, "127.0.0.1", () => {
-      proxy.off("error", reject);
-      resolve();
-    });
-  });
+  await once(proxy.listen(0, "127.0.0.1"), "listening");
   const address = proxy.address();
   if (!address || typeof address === "string") {
     throw new Error("Secret egress proxy failed to bind loopback");
