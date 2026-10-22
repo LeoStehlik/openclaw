@@ -83,7 +83,7 @@ function fixture(review: Partial<NonNullable<GatewaySessionRow["providerReview"]
     request,
     refresh,
     click(text: string, settle = true) {
-      const button = mounted.getByRole("button", { name: text });
+      const button = mounted.getByRole<HTMLButtonElement>("button", { name: text });
       button.click();
       if (settle) {
         flush();
