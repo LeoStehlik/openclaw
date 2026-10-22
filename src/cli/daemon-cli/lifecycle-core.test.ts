@@ -285,6 +285,8 @@ it.each([
     expect(output).toContain("If the domain is missing");
     expect(output).toContain("access errors");
     expect(output).not.toContain("Manage its LaunchAgent from");
+    expect(output).toContain("If an external supervisor owns this Gateway");
+    expect(output).toContain("https://docs.openclaw.ai/gateway#existing-system-launchdaemons");
     expect(output).not.toContain("OPENCLAW_SERVICE_REPAIR_POLICY=external");
     expectNoCalls(service.start, service.stop, service.restart);
     expect(native.mock.calls.every(([, argv]) => argv[0] === "print")).toBe(true);
