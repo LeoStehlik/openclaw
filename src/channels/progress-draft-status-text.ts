@@ -1,5 +1,4 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -96,7 +95,7 @@ function normalizeReasoningProgressInput(text: string): string {
 
 export function formatReasoningProgressDisplayLine(text: string, maxChars: number): string {
   const normalizedText = normalizeReasoningProgressInput(text);
-  const formatted = normalizeReasoningProgressLine(formatReasoningMessage(normalizedText));
+  const formatted = normalizeReasoningProgressLine(normalizedText && `_${normalizedText}_`);
   if (!formatted) {
     return "";
   }
