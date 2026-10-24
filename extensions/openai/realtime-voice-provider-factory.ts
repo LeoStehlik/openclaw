@@ -265,15 +265,15 @@ export function buildOpenAIRealtimeVoiceProvider(
         const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
         return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
       }
+      const voice =
+        normalizeOpenAIRealtimeVoice(req.voice) ??
+        normalizeOpenAIRealtimeVoice(config.voice) ??
+        "alloy";
       if (req.clientControl) {
         if (!quicksilverBroker) {
           throw new Error("OpenAI realtime browser session broker is unavailable");
         }
         const auth = await requireOpenAIRealtimePlatformAuth(authParams, context);
-        const voice =
-          normalizeOpenAIRealtimeVoice(req.voice) ??
-          normalizeOpenAIRealtimeVoice(config.voice) ??
-          "alloy";
         const sessionConfig = buildOpenAIRealtimeGaSessionPolicy({
           audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
           instructions: req.instructions,
@@ -346,10 +346,6 @@ export function buildOpenAIRealtimeVoiceProvider(
           { type: "api-key", token: auth },
         );
       }
-      const voice =
-        normalizeOpenAIRealtimeVoice(req.voice) ??
-        normalizeOpenAIRealtimeVoice(config.voice) ??
-        "alloy";
       const tools = normalizeOpenAIRealtimeTools(req.tools, context.warn);
       const session: Record<string, unknown> & { model: string } = {
         type: "realtime",
@@ -362,15 +358,9 @@ export function buildOpenAIRealtimeVoiceProvider(
               type: "server_vad",
               create_response: true,
               interrupt_response: true,
-              ...(typeof (req.vadThreshold ?? config.vadThreshold) === "number"
-                ? { threshold: req.vadThreshold ?? config.vadThreshold }
-                : {}),
-              ...(typeof (req.prefixPaddingMs ?? config.prefixPaddingMs) === "number"
-                ? { prefix_padding_ms: req.prefixPaddingMs ?? config.prefixPaddingMs }
-                : {}),
-              ...(typeof (req.silenceDurationMs ?? config.silenceDurationMs) === "number"
-                ? { silence_duration_ms: req.silenceDurationMs ?? config.silenceDurationMs }
-                : {}),
+              threshold: req.vadThreshold ?? config.vadThreshold,
+              prefix_padding_ms: req.prefixPaddingMs ?? config.prefixPaddingMs,
+              silence_duration_ms: req.silenceDurationMs ?? config.silenceDurationMs,
             },
             transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
           },
@@ -472,6 +462,12 @@ export function buildOpenAIRealtimeVoiceProvider(
         (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
     );
   };
+  const projectGptLiveCapabilities = (model: string, supportsGatewayControl = false) => ({
+    ...OPENAI_REALTIME_CAPABILITIES,
+    ...OPENAI_QUICKSILVER_CAPABILITIES,
+    ...resolveOpenAIQuicksilverVoiceCapabilities(model),
+    ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
+  });
   const internalApi: InternalRealtimeVoiceProviderApi = {
     // Retained for public synchronous SDK calls through 2026-12-31.
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
@@ -511,12 +507,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             providerConfig: { ...providerConfig, model: effectiveModel },
             agentId,
           });
-        return {
-          ...OPENAI_REALTIME_CAPABILITIES,
-          ...OPENAI_QUICKSILVER_CAPABILITIES,
-          ...resolveOpenAIQuicksilverVoiceCapabilities(effectiveModel),
-          ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
-        };
+        return projectGptLiveCapabilities(effectiveModel, supportsGatewayControl);
       }
       return {
         ...OPENAI_REALTIME_CAPABILITIES,
@@ -550,12 +541,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             providerConfig: { ...providerConfig, model: effectiveModel },
             agentId,
           }));
-        return {
-          ...OPENAI_REALTIME_CAPABILITIES,
-          ...OPENAI_QUICKSILVER_CAPABILITIES,
-          ...resolveOpenAIQuicksilverVoiceCapabilities(effectiveModel),
-          ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
-        };
+        return projectGptLiveCapabilities(effectiveModel, supportsGatewayControl);
       }
       return {
         ...OPENAI_REALTIME_CAPABILITIES,
@@ -608,11 +594,7 @@ export function buildOpenAIRealtimeVoiceProvider(
         return CUSTOM_ENDPOINT_CAPABILITIES;
       }
       if (isOpenAIGptLiveModel(model ?? config.model)) {
-        return {
-          ...OPENAI_REALTIME_CAPABILITIES,
-          ...OPENAI_QUICKSILVER_CAPABILITIES,
-          ...resolveOpenAIQuicksilverVoiceCapabilities(model ?? config.model ?? ""),
-        };
+        return projectGptLiveCapabilities(model ?? config.model ?? "");
       }
       return OPENAI_REALTIME_CAPABILITIES;
     },

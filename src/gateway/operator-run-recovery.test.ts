@@ -166,6 +166,19 @@ function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => v
   expect(authority.signal?.aborted).toBe(true);
 }
 
+async function restoreFixture(fixture: RecoveryFixture) {
+  const source = expectDefined(await fixture.restore(), "restored operator source");
+  return { ...source, [Symbol.dispose]: source.release };
+}
+
+function persistDevices(stateDir: string, devices: PairedDevice[], mode: "paired" | "both") {
+  persistDevicePairingStoreState(
+    { pendingById: {}, pairedByDeviceId: Object.fromEntries(devices.map((d) => [d.deviceId, d])) },
+    stateDir,
+    mode,
+  );
+}
+
 describe("restart recovery authenticated operator source", () => {
   it("retains the validated auth policy across checks and rejects a changed grant", () =>
     withRecovery(async (fixture) => {
@@ -418,15 +431,10 @@ describe("restart recovery authenticated operator source", () => {
             getCommandOwnerAuthority(await context(admin.identity.senderId))?.operatorAuthority,
             "live linked operator with configured model policy",
           );
-          expect(bounded.modelPolicy?.allows({ provider: "fixture", model: "permitted" })).toBe(
-            true,
-          );
-          expect(
-            bounded.modelPolicy?.allows({
-              provider: "fixture",
-              model: `blocked-${count - 1}/test`,
-            }),
-          ).toBe(false);
+          const allows = (model: string) =>
+            bounded.modelPolicy?.allows({ provider: "fixture", model });
+          expect(allows("permitted")).toBe(true);
+          expect(allows(`blocked-${count - 1}/test`)).toBe(false);
           const captured = captureQueuedOperatorRecoverySource(bounded);
           expect(bounded.assertCurrent).not.toThrow();
           const serialized = JSON.stringify(captured);
@@ -508,8 +516,7 @@ describe("restart recovery authenticated operator source", () => {
 
   it("keeps restored authority current during unrelated issuance", () =>
     withRecovery(async (fixture, stateDir) => {
-      const restored = expectDefined(await fixture.restore(), "exact device source");
-      using _ = { [Symbol.dispose]: restored.release };
+      using restored = await restoreFixture(fixture);
 
       await issueDeviceBootstrapToken({ baseDir: stateDir });
       expectCurrent(restored.authority);
@@ -518,8 +525,7 @@ describe("restart recovery authenticated operator source", () => {
     withRecovery(
       async (fixture) => {
         expect(fixture.entry.restartRecoveryOperatorSource?.snapshot.device).toBeUndefined();
-        const restored = expectDefined(await fixture.restore(), "proxy-owned source");
-        using _ = { [Symbol.dispose]: restored.release };
+        using restored = await restoreFixture(fixture);
 
         expect(
           (await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" })).ok,
@@ -598,14 +604,7 @@ describe("restart recovery authenticated operator source", () => {
       try {
         // A sibling owner changes the revision before a partial lookup publishes it.
         const unrelated = { ...pairedOperator(), deviceId: "unrelated-device" };
-        persistDevicePairingStoreState(
-          {
-            pendingById: {},
-            pairedByDeviceId: { [device.deviceId]: device, [unrelated.deviceId]: unrelated },
-          },
-          stateDir,
-          "paired",
-        );
+        persistDevices(stateDir, [device, unrelated], "paired");
         expect((await getPairedDevice(unrelated.deviceId))?.deviceId).toBe(unrelated.deviceId);
         expectCurrent(accepted.authority);
         expect(
@@ -733,16 +732,14 @@ describe("restart recovery authenticated operator source", () => {
           await expect(fixture.restore()).rejects.toThrow("Gateway access is not active");
           permitted = true;
           resume.mockClear();
-          const restored = expectDefined(await fixture.restore(), "restored original grant");
-          using _ = { [Symbol.dispose]: restored.release };
+          using restored = await restoreFixture(fixture);
 
           expect(restored.authority.gatewayAccessGrant).toEqual(original);
           expect(resume).toHaveBeenCalledWith(
             expect.objectContaining({ grantId: original.grantId }),
           );
           restored.authority.assertCurrent();
-          restored.authority.readCurrentRoleAssignment?.();
-          restored.authority.readCurrentGithubLogin?.();
+          restored.authority.readCurrentRoleFacts?.();
           expect(resume).toHaveBeenCalledTimes(1);
           if (revocation === "signal") {
             controller.abort(new Error("Original grant revoked"));
@@ -799,10 +796,9 @@ describe("restart recovery authenticated operator source", () => {
         ],
         updateMode: "none",
       });
-      expect(admitted.appendedCount).toBe(1);
+      expect(admitted.messages.filter((m) => m.appended)).toHaveLength(1);
       expect(admitted.rejectedReason).toBeUndefined();
-      const restored = expectDefined(await fixture.restore(), "restored operator source");
-      using _ = { [Symbol.dispose]: restored.release };
+      using restored = await restoreFixture(fixture);
 
       expect(restored.authority).toMatchObject({
         scopes: ["operator.write"],
@@ -875,14 +871,7 @@ describe("restart recovery authenticated operator source", () => {
         if (change === "approval scopes narrowed") {
           device.approvedScopes = ["operator.read"];
         }
-        persistDevicePairingStoreState(
-          {
-            pendingById: {},
-            pairedByDeviceId: change === "device removed" ? {} : { [device.deviceId]: device },
-          },
-          stateDir,
-          "both",
-        );
+        persistDevices(stateDir, change === "device removed" ? [] : [device], "both");
       }
       await expect(fixture.restore()).rejects.toThrow(
         /Restart recovery operator|user profile not found/,
@@ -894,8 +883,7 @@ describe("restart recovery authenticated operator source", () => {
     "fences retained recovered authority after %s",
     (change) =>
       withRecovery(async (fixture) => {
-        const restored = expectDefined(await fixture.restore(), "restored operator source");
-        using _ = { [Symbol.dispose]: restored.release };
+        using restored = await restoreFixture(fixture);
 
         if (change === "claim retired") {
           fixture.retire();
@@ -933,8 +921,7 @@ describe("restart recovery authenticated operator source", () => {
       const current = structuredClone(cfg);
       current.gateway!.roles!.definitions.operator!.scopes = ["operator.write"];
       fixture.setConfig(current);
-      const restored = expectDefined(await fixture.restore(), "restored role authority");
-      using _ = { [Symbol.dispose]: restored.release };
+      using restored = await restoreFixture(fixture);
 
       expect(restored.authority.scopes).toEqual(["operator.write"]);
       expectCurrent(restored.authority);

@@ -42,7 +42,7 @@ import {
   resolveMessageReplyLine,
 } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
-import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
+import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import { selectBrowserTabPreviews } from "./chat-tool-cards.ts";
@@ -206,7 +206,10 @@ export function MessageGroupContent(props: {
         )}
       </For>
       {options().showToolCalls === false ? undefined : (
-        <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+        <BrowserTabPreviews
+          previews={selectBrowserTabPreviews([props.group], options())}
+          mediaReadAllowed={options().mediaReadAllowed}
+        />
       )}
     </Show>
   );
@@ -225,6 +228,7 @@ function GroupAvatar(props: {
         fallback={
           <ChatAvatar
             elementRef={props.elementRef}
+            mediaReadAllowed={options().mediaReadAllowed}
             role={frame().group.role}
             assistant={{
               agentId: options().agentId,
@@ -454,13 +458,20 @@ function FramedMessageGroup(props: {
           {options().frameContent}
         </Show>
         {frame().ownsRunFrame || options().showToolCalls === false ? undefined : (
-          <BrowserTabPreviews previews={selectBrowserTabPreviews([props.group], options())} />
+          <BrowserTabPreviews
+            previews={selectBrowserTabPreviews([props.group], options())}
+            mediaReadAllowed={options().mediaReadAllowed}
+          />
         )}
         <Show
           when={Boolean(options().activeContinuation)}
           fallback={
             options().turnRecap ? (
-              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
+              <TurnRecapRow
+                recap={options().turnRecap!}
+                presentation="continuation"
+                hideDuration={options().hideTurnRecapDuration}
+              />
             ) : undefined
           }
         >
@@ -498,10 +509,15 @@ function FramedMessageGroup(props: {
               {frame().normalizedRole === "user" &&
               frame().showAvatar &&
               frame().avatarPlacement === "footer" ? (
-                <ChatAuthorAvatar
-                  sender={props.group.sender}
-                  channelAvatar={options().channelAvatar}
-                />
+                <Show
+                  when={options().mediaReadAllowed !== false}
+                  fallback={<span class="chat-author-avatar" aria-hidden="true" />}
+                >
+                  <ChatAuthorAvatar
+                    sender={props.group.sender}
+                    channelAvatar={options().channelAvatar}
+                  />
+                </Show>
               ) : undefined}
               <SenderIdentity frame={frame()} />
               <ChatSendStatus status={frame().sendStatus} actions={options()} />

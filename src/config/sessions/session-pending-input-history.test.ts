@@ -33,6 +33,40 @@ import { readSessionPendingInputContext } from "./session-pending-input-history.
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
 
+function pauseFirstPendingHistorySnapshot() {
+  const ready = createDeferred();
+  const release = createDeferred();
+  const readHistory = historyRuntime.withSessionHistoryWorkerDatabase;
+  let paused = false;
+  const spy = vi
+    .spyOn(historyRuntime, "withSessionHistoryWorkerDatabase")
+    .mockImplementation(
+      <T>(
+        options: Parameters<typeof readHistory>[0],
+        operation: (owner: historyRuntime.SessionHistoryWorkerDatabase) => Promise<T>,
+        lane?: Parameters<typeof readHistory>[2],
+      ) =>
+        readHistory(
+          options,
+          (owner) =>
+            operation({
+              ...owner,
+              readPendingInputHistory: async (...args) => {
+                const snapshot = await owner.readPendingInputHistory(...args);
+                if (!paused) {
+                  paused = true;
+                  ready.resolve();
+                  await release.promise;
+                }
+                return snapshot;
+              },
+            }),
+          lane,
+        ),
+    );
+  return { ready, release, spy };
+}
+
 it("skips covered empty history and reads a newly staged input after its owner commits", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
@@ -198,63 +232,70 @@ it("bounds materialized pending pages by bytes without truncating input or skipp
   });
 });
 
-it("reads count-free context in one statement and includes later committed inputs", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const scope = {
-      agentId: "main",
-      sessionKey: "agent:main:pending-context",
-      sessionId: "pending-context",
-    };
-    const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
-    const read = () => {
-      const counter = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(database.db),
-        ["read"],
-        () => "read",
+it.each(["context", "id"] as const)(
+  "reads %s in one statement and includes later committed inputs",
+  async (mode) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:pending-context",
+        sessionId: "pending-context",
+      };
+      const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+      writeSessionEntry(database, scope.sessionKey, { sessionId: scope.sessionId, updatedAt: 1 });
+      let inputId = "not-yet-written";
+      const read = () => {
+        const native = requireNativeSqliteDatabase(database.db);
+        const exec = vi.spyOn(native, "exec");
+        const counter = trackSqliteStatementExecutions(native, ["read"], () => "read");
+        try {
+          const page = readPendingInputHistoryInDatabase(database, {
+            ...scope,
+            ...(mode === "context" ? { includeTotal: false as const } : { id: inputId }),
+          });
+          expect(counter.counts.read + exec.mock.calls.length).toBe(1);
+          expect(page.total).toBeUndefined();
+          return page;
+        } finally {
+          counter.restore();
+          exec.mockRestore();
+        }
+      };
+      expect(read().rows).toEqual([]);
+      const receipt = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId: "later-input",
+          message: {
+            role: "user",
+            content: "Retained after the empty read",
+            timestamp: 1,
+            idempotencyKey: "later-input:user",
+          },
+          assertCurrent() {},
+        }),
+        "Expected accepted input custody",
       );
       try {
-        const page = readPendingInputHistoryInDatabase(database, { ...scope, includeTotal: false });
-        expect(counter.counts.read).toBe(1);
-        expect(page.total).toBeUndefined();
-        return page;
+        inputId = receipt.inputId;
+        receipt.finish("interrupted");
+        await receipt.settled?.();
+        expect(read().rows).toMatchObject([{ input_id: receipt.inputId, state: "interrupted" }]);
+        expect(await readSessionPendingInputContext(scope)).toMatchObject({
+          items: [
+            {
+              id: receipt.inputId,
+              state: "interrupted",
+              message: { content: "Retained after the empty read" },
+            },
+          ],
+        });
       } finally {
-        counter.restore();
+        receipt.finish("interrupted");
+        await receipt.settled?.();
       }
-    };
-    expect(read().rows).toEqual([]);
-    const receipt = expectDefined(
-      await stageSessionPendingInput(scope, {
-        runId: "later-input",
-        message: {
-          role: "user",
-          content: "Retained after the empty read",
-          timestamp: 1,
-          idempotencyKey: "later-input:user",
-        },
-        assertCurrent() {},
-      }),
-      "Expected accepted input custody",
-    );
-    try {
-      receipt.finish("interrupted");
-      await receipt.settled?.();
-      expect(read().rows).toMatchObject([{ input_id: receipt.inputId, state: "interrupted" }]);
-      expect(await readSessionPendingInputContext(scope)).toMatchObject({
-        items: [
-          {
-            id: receipt.inputId,
-            state: "interrupted",
-            message: { content: "Retained after the empty read" },
-          },
-        ],
-      });
-    } finally {
-      receipt.finish("interrupted");
-      await receipt.settled?.();
-    }
-  });
-});
+    });
+  },
+);
 
 it("reads pending history and exact messages without caller-thread data SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -351,36 +392,7 @@ it("keeps a recovered owner queued when its generation changes after the history
       "Expected the original accepted input",
     );
     let recovered: SessionPendingInputReceipt | undefined;
-    const readReady = createDeferred();
-    const resume = createDeferred();
-    const readHistory = historyRuntime.withSessionHistoryWorkerDatabase;
-    let paused = false;
-    const spy = vi
-      .spyOn(historyRuntime, "withSessionHistoryWorkerDatabase")
-      .mockImplementation(
-        <T>(
-          options: Parameters<typeof readHistory>[0],
-          operation: (owner: historyRuntime.SessionHistoryWorkerDatabase) => Promise<T>,
-          lane?: Parameters<typeof readHistory>[2],
-        ) =>
-          readHistory(
-            options,
-            (owner) =>
-              operation({
-                ...owner,
-                readPendingInputHistory: async (...args) => {
-                  const snapshot = await owner.readPendingInputHistory(...args);
-                  if (!paused) {
-                    paused = true;
-                    readReady.resolve();
-                    await resume.promise;
-                  }
-                  return snapshot;
-                },
-              }),
-            lane,
-          ),
-      );
+    const { ready: readReady, release: resume, spy } = pauseFirstPendingHistorySnapshot();
     const history = listSessionPendingInputs(scope);
     try {
       await withinTest(
@@ -442,36 +454,7 @@ it("keeps concurrent history readers consistent after one reconciles orphaned in
     database.db
       .prepare("UPDATE session_pending_inputs SET state = 'queued' WHERE input_id = ?")
       .run(receipt.inputId);
-    const snapshotReady = createDeferred();
-    const release = createDeferred();
-    const readHistory = historyRuntime.withSessionHistoryWorkerDatabase;
-    let paused = false;
-    const spy = vi
-      .spyOn(historyRuntime, "withSessionHistoryWorkerDatabase")
-      .mockImplementation(
-        <T>(
-          options: Parameters<typeof readHistory>[0],
-          operation: (owner: historyRuntime.SessionHistoryWorkerDatabase) => Promise<T>,
-          lane?: Parameters<typeof readHistory>[2],
-        ) =>
-          readHistory(
-            options,
-            (owner) =>
-              operation({
-                ...owner,
-                readPendingInputHistory: async (...args) => {
-                  const snapshot = await owner.readPendingInputHistory(...args);
-                  if (!paused) {
-                    paused = true;
-                    snapshotReady.resolve();
-                    await release.promise;
-                  }
-                  return snapshot;
-                },
-              }),
-            lane,
-          ),
-      );
+    const { ready: snapshotReady, release, spy } = pauseFirstPendingHistorySnapshot();
     const first = listSessionPendingInputs(scope);
     try {
       await withinTest(

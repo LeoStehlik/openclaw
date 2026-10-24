@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -14,12 +15,14 @@ import {
   createDetailsDesktopReveal,
 } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsProcessRow } from "./chat-details-process-row.tsx";
+import { createDetailsProcessesPresentation } from "./chat-details-processes-presentation.ts";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = {
   details: ChatDetailsProps;
@@ -267,7 +270,6 @@ export function ChatDetailsBackground(
                 <ChatSubagentActivity
                   rows={subagents()}
                   limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
-                  compact={true}
                   onOpenSubagent={props.details.onOpenSubagent}
                   onOpenSession={props.details.onSessionSelect}
                 />
@@ -295,7 +297,6 @@ export function ChatDetailsBackground(
               >
                 <ChatSubagentActivity
                   rows={unlisted()}
-                  compact={true}
                   onOpenSession={props.details.onSessionSelect}
                 />
               </Show>
@@ -321,10 +322,13 @@ function DetailsProcesses(
   },
 ) {
   const presentation = createProcessesPresentation(() => props.processes(), true);
+  const detailsProcesses = createDetailsProcessesPresentation(() => ({
+    sessionKey: props.details.sessionKey,
+    agentId: props.details.currentAgentId ?? "main",
+    rows: props.processes()?.snapshot.rows ?? [],
+  }));
   const [processesExpanded, setProcessesExpanded] = createSignal(false);
-  const processRows = createMemo(() =>
-    attentionOrder(props.processes()?.snapshot.rows ?? [], processState),
-  );
+  const processRows = createMemo(() => attentionOrder(detailsProcesses.rows(), processState));
   const processTally = createMemo(() => tally(processRows(), processState));
   const visibleProcesses = createMemo(() =>
     processesExpanded() ? processRows() : processRows().slice(0, PREVIEW_ROWS),

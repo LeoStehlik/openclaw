@@ -49,6 +49,7 @@ import {
   captureChannelOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
+import { prepareRestartRecoveryParentSource } from "./operator-run-recovery-parent.js";
 import {
   decodeGatewayOperatorRecoverySource,
   decodeQueuedOperatorRecoverySource,
@@ -453,6 +454,7 @@ export async function restoreGatewayRunRecovery(params: {
 }): Promise<{
   operator?: RestoredGatewayOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
+  parentSource?: { source: SessionSourceAssertion; release: () => void };
 }> {
   const target = { ...params.target };
   let entry: InternalSessionEntry | undefined;
@@ -558,6 +560,13 @@ export async function restoreGatewayRunRecovery(params: {
     const requesterOrigin = params.restoreRequester
       ? readRestartRecoveryRequesterSource({ ...target, entry })
       : undefined;
+    const parentSource = await prepareRestartRecoveryParentSource({
+      ...params,
+      target,
+      entry,
+      requesterOrigin,
+      operatorSource: operator ? { ...target, authority: operator.authority } : undefined,
+    });
     if (operator) {
       recoverySources.set(operator.authority, {
         target,
@@ -567,7 +576,7 @@ export async function restoreGatewayRunRecovery(params: {
         }),
       });
     }
-    return { operator, requesterOrigin };
+    return { operator, requesterOrigin, parentSource };
   } catch (error) {
     operator?.release();
     throw error;
@@ -617,15 +626,6 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
       throw new Error("Queued channel operator authority changed; submit a new request.");
     }
   };
-  const releaseHold = () => {
-    let released = false;
-    return () => {
-      if (!released) {
-        released = true;
-        references -= 1;
-      }
-    };
-  };
   const live = captureChannelOperatorRunAuthority({
     ...profile,
     recoveryReference: snapshot.reference,
@@ -634,22 +634,47 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     assertCurrent,
     signal: prepared.signal,
   });
+  // Every hold keeps the live revocation subscribed, so retained work settles on revocation.
+  const releaseHold = () => {
+    const releaseLive = live.retain?.();
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        references -= 1;
+        releaseLive?.();
+      }
+    };
+  };
+  const release = releaseHold();
   const originalModels = snapshot.modelPolicy
     ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
     : undefined;
-  const authority = createAdmittedRunOperatorAuthority({
-    ...live,
-    channelRecoverySource: { reference: snapshot.reference, modelPolicy: originalModels },
-    signal: prepared.signal,
-    retain: () => {
-      assertCurrent();
-      references += 1;
-      return releaseHold();
-    },
-    get modelPolicy() {
-      return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
-    },
-  });
-  authority.assertCurrent();
-  return { authority, controlUiAdmin: false, release: releaseHold() };
+  try {
+    const authority = createAdmittedRunOperatorAuthority({
+      ...live,
+      channelRecoverySource: { reference: snapshot.reference, modelPolicy: originalModels },
+      retain: () => {
+        if (references === 0) {
+          throw new Error("Queued channel operator authority is no longer active.");
+        }
+        references += 1;
+        try {
+          // The live check latches a refusal into the signal every retained holder observes.
+          return releaseHold();
+        } catch (error) {
+          references -= 1;
+          throw error;
+        }
+      },
+      get modelPolicy() {
+        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
+      },
+    });
+    authority.assertCurrent();
+    return { authority, controlUiAdmin: false, release };
+  } catch (error) {
+    release();
+    throw error;
+  }
 }

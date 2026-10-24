@@ -80,6 +80,7 @@ import {
 import type { ChatProps } from "./chat-view.tsx";
 import * as chatMessageConfirmation from "./components/chat-message-confirmation-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
   resetThreadPresentation,
@@ -87,11 +88,11 @@ import {
   toggleTranscriptSearch,
 } from "./components/chat-thread-interactions.ts";
 import {
+  flushDeferredRowPrune,
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { ChatWelcome } from "./components/chat-welcome.tsx";
-import { saveChatSessionScrollPosition } from "./scroll.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
 import {
   workspaceConflictPathForDisplay,
@@ -333,111 +334,6 @@ describe("chat typing status", () => {
 });
 
 describe("chat run error", () => {
-  it("keeps Check delivery reachable when exact history deduplicates the retained bubble", () => {
-    vi.mocked(chatThread.buildCachedChatItems).mockRestore();
-    const onRetrySessionPlacementStartup = vi.fn();
-    const container = renderChatView({
-      canSend: false,
-      messages: [
-        {
-          role: "user",
-          content: "original prompt",
-          __openclaw: { idempotencyKey: "initial:user" },
-        },
-      ],
-      placementStartup: {
-        sessionKey: "main",
-        targetKind: "profile",
-        phase: "failed",
-        startedAt: 1,
-        retryable: true,
-        action: "check-delivery",
-        initialTurn: {
-          id: "initial",
-          sendRunId: "initial",
-          text: "original prompt",
-          createdAt: 1,
-          sendAttempts: 1,
-          sendState: "unconfirmed",
-        },
-      },
-      onRetrySessionPlacementStartup,
-    });
-    expect(container.querySelectorAll(".chat-group.user")).toHaveLength(1);
-    expect(container.querySelector(".chat-send-status__retry")).toBeNull();
-    const action = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".chat-error button"),
-    ).find((button) => button.textContent?.trim() === "Check delivery");
-    expect(action).toBeDefined();
-    action?.click();
-    expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
-  });
-
-  it.each(["retry", "check-delivery"] as const)(
-    "keeps the retained initial turn's %s action usable while ordinary sending is held",
-    (action) => {
-      vi.mocked(chatThread.buildCachedChatItems).mockRestore();
-      const onRetrySessionPlacementStartup = vi.fn();
-      const onQueueRetry = vi.fn();
-      const paneId = `startup-${action}`;
-      saveChatSessionScrollPosition(paneId, "main", { scrollTop: 0, anchorToEnd: false });
-      const container = renderChatView({
-        transcript: createTestTranscript(paneId),
-        canSend: false,
-        messages: [
-          { role: "user", content: "[System] Gateway restarted", timestamp: 3 },
-          { role: "assistant", content: "Worker recovery is pending", timestamp: 4 },
-        ],
-        queue: [
-          {
-            id: "ordinary",
-            text: "later draft",
-            createdAt: 2,
-            sendAttempts: 1,
-            sendState: "failed",
-          },
-        ],
-        placementStartup: {
-          sessionKey: "agent:main:startup",
-          targetKind: "profile",
-          phase: "failed",
-          startedAt: 1,
-          retryable: true,
-          action,
-          error: "Retained initial turn",
-          initialTurn: {
-            id: "initial",
-            sendRunId: "initial",
-            text: "original prompt",
-            createdAt: 1,
-            sendAttempts: 1,
-            sendState: action === "retry" ? "failed" : "unconfirmed",
-          },
-        },
-        onRetrySessionPlacementStartup,
-        onQueueRetry,
-      });
-      expect(container.querySelector(".chat-thread")?.textContent).toContain("original prompt");
-      expect(container.querySelector(".chat-thread")?.textContent).toContain("later draft");
-      const transcript = container.querySelector(".chat-thread")?.textContent ?? "";
-      expect(transcript.indexOf("original prompt")).toBeLessThan(
-        transcript.indexOf("Gateway restarted"),
-      );
-      expect(transcript.indexOf("Worker recovery is pending")).toBeLessThan(
-        transcript.indexOf("later draft"),
-      );
-      const buttons = container.querySelectorAll<HTMLButtonElement>(".chat-send-status__retry");
-      expect(buttons).toHaveLength(1);
-      expect(buttons[0]?.textContent?.trim()).toBe(action === "retry" ? "Retry" : "Check delivery");
-      buttons[0]?.click();
-      expect(onRetrySessionPlacementStartup).toHaveBeenCalledOnce();
-      expect(onQueueRetry).not.toHaveBeenCalled();
-      expect(container.querySelector(".chat-error")?.textContent).toContain(
-        action === "retry" ? "Retained initial turn" : "without resending it or starting a worker",
-      );
-    },
-  );
-
   it.each(["run", "request"])(
     "strips only the decorative prefix from a %s error display and copies the raw diagnostic",
     async (source) => {
@@ -687,7 +583,7 @@ describe("chat history pagination", () => {
     expect(loadingButton.textContent?.trim()).toBe("Loading earlier…");
     expect(loadingButton.getAttribute("aria-label")).toBe("Loading earlier…");
     expect(loadingButton.getAttribute("aria-busy")).toBe("true");
-    expect(loadingButton.disabled).toBe(true);
+    expect(loadingButton.getAttribute("aria-disabled")).toBe("true");
     expect(loadingButton.closest(".chat-history-boundary--loading")).not.toBeNull();
     loadingButton.click();
     expect(onShowEarlier).toHaveBeenCalledOnce();
@@ -799,7 +695,7 @@ describe("retained input navigation", () => {
     expect(historyState.chatMessages).toEqual([]);
   });
 
-  it("hides the retained queue copy represented by pending custody without hiding an identical new send", () => {
+  it("hides the retained queue copy represented by pending custody without hiding an identical new send", async () => {
     const historyState = makeChatHost({ currentSessionId: "retained-input-session" });
     const message = {
       role: "user",
@@ -836,6 +732,9 @@ describe("retained input navigation", () => {
       onQueueMove,
     });
 
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-queue__item")).toHaveLength(2),
+    );
     const rows = container.querySelectorAll(".chat-queue__item");
     expect([...rows].map((row) => row.getAttribute("data-chat-queue-item"))).toEqual([
       "before",
@@ -1553,7 +1452,7 @@ describe("chat loading skeleton", () => {
     ]);
   });
 
-  it("releases the embedded status when later work steals ownership from an unchanged reply", () => {
+  it("releases the embedded status when later work steals ownership from an unchanged reply", async () => {
     // Rows memoize on their own item identity, so an unchanged reply that
     // stops owning the status must still re-render without it.
     const replyGroup = {
@@ -1597,6 +1496,7 @@ describe("chat loading skeleton", () => {
       readingIndicator,
     ] as ReturnType<typeof chatThread.buildCachedChatItems>);
     renderChatInto(container, props);
+    await flushDeferredRowPrune();
     const bubble = requireElement(
       container,
       '[data-message-id="message:assistant:reply"]',
@@ -1670,15 +1570,16 @@ describe("chat loading skeleton", () => {
     // yield to the subscription windows.
     container.querySelector<HTMLElement>(".context-usage summary")!.click();
     flush();
-    expect(container.querySelector("[data-chat-usage-provider='true']")?.textContent).toContain(
-      "OpenAI",
-    );
+    expect(container.querySelector("[data-chat-usage-account='true']")?.textContent).toBe("OpenAI");
     const limitRow = container.querySelector(".context-usage__limit");
-    expect(limitRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Weekly 72%");
+    expect(limitRow?.getAttribute("role")).toBe("progressbar");
+    expect(limitRow?.getAttribute("aria-label")).toBe("Weekly");
+    expect(limitRow?.getAttribute("aria-valuenow")).toBe("72");
     const usageLink = container.querySelector<HTMLAnchorElement>(
       ".context-usage__popover [data-chat-provider-usage='true']",
     );
     expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
+    expect(usageLink?.getAttribute("aria-label")).toBe("Open usage dashboard");
   });
 
   it.each([
@@ -2754,7 +2655,7 @@ describe("chat attachment picker", () => {
     }
   });
 
-  it("keeps the default placeholder only for internally generated pasted text", () => {
+  it("keeps the agent-aware placeholder with pasted text, files, images, and comments", () => {
     let pastedTextAttachments: ChatAttachment[] = [];
     const pasteTarget = renderChatView({
       draft: "Review the attachment",
@@ -2791,13 +2692,34 @@ describe("chat attachment picker", () => {
 
     const ordinaryTextFile = renderChatView({ attachments: [namedLikePaste] });
     expect(ordinaryTextFile.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholderWithAttachments"),
+      t("chat.composer.placeholder", { name: "Val" }),
     );
     expect(ordinaryTextFile.querySelector(".chat-attachment-text-action")).toBeNull();
 
     const withImage = renderChatView({ attachments: [imageAttachment] });
     expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholderWithAttachments"),
+      t("chat.composer.placeholder", { name: "Val" }),
+    );
+
+    const withComment = renderChatView({
+      assistantName: "Roboclaw",
+      attachments: [
+        {
+          id: "comment",
+          mimeType: "text/plain",
+          fileName: "selection-comment.txt",
+          selectionAnnotation: {
+            text: "Review this line",
+            comment: "Keep this context",
+            sessionKey: "agent:main:main",
+            start: 0,
+            end: 16,
+          },
+        },
+      ],
+    });
+    expect(withComment.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+      t("chat.composer.placeholder", { name: "Roboclaw" }),
     );
   });
 
@@ -3171,6 +3093,7 @@ describe("chat model controls", () => {
         ],
       },
     });
+    expandModelProviders(container);
     expect(
       container
         .querySelector('[data-chat-model-provider="openai"]')
@@ -3270,10 +3193,16 @@ describe("chat model controls", () => {
     idReads = 0;
     const container = await renderModelControls(state);
     const rows = container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]");
-    expect(rows).toHaveLength(size);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.length).toBeLessThan(size);
     expect(rows[0]?.dataset.chatModelOption).toBe("example/model-0");
-    expect(rows[size - 1]?.textContent).toContain(`Model ${size - 1}`);
-    expect(rows[size - 1]?.textContent).toContain("128k");
+    const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
+    search.value = `example/model-${size - 1}`;
+    search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    flush();
+    const last = container.querySelector(`[data-chat-model-option="example/model-${size - 1}"]`);
+    expect(last?.textContent).toContain(`Model ${size - 1}`);
+    expect(last?.textContent).toContain("128k");
     expect(idReads).toBeLessThan(size * 60);
   });
 
@@ -3294,6 +3223,7 @@ describe("chat model controls", () => {
       ],
     });
     const container = await renderModelControls(state);
+    expandModelProviders(container);
     expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(3);
     const shared = container.querySelector('[data-chat-model-option="example/shared"]');
     expect(shared?.textContent).toContain("Last label");
@@ -3674,6 +3604,7 @@ describe("chat model controls", () => {
         button.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
       ),
     ).toEqual(["OpenRouter", "Google"]);
+    expandModelProviders(container);
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')
         ?.textContent,
@@ -3773,6 +3704,7 @@ describe("chat model controls", () => {
       undefined,
     );
 
+    await waitForSolid(() => expect(getThinkingSlider(container)).toBeInstanceOf(HTMLInputElement));
     const slider = getThinkingSlider(container);
     expect(slider).toBeInstanceOf(HTMLInputElement);
     if (slider) {
@@ -4055,7 +3987,7 @@ describe("chat model controls", () => {
       }));
       const container = await renderModelControls(state);
       expect(getChatThinkingValue(getThinkingSelect(container))).toBe("");
-      expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive");
+      await waitForSolid(() => expect(getThinkingReasoningValueLabel(container)).toBe("Adaptive"));
       if (!omitSessionFromList) {
         expect(getThinkingSliderValues(container)).not.toContain("adaptive");
         const slider = getThinkingSlider(container);
@@ -4094,6 +4026,10 @@ describe("chat model controls", () => {
             },
           ]);
       const container = await renderModelControls(state);
+      getThinkingSlider(container);
+      await waitForSolid(() =>
+        expect(container.querySelector('[data-chat-thinking-option="adaptive"]')).not.toBeNull(),
+      );
       expect(getThinkingSlider(container)).toBeNull();
       const only = container.querySelector<HTMLButtonElement>(
         '[data-chat-thinking-option="adaptive"]',

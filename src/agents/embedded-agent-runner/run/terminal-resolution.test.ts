@@ -2,6 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
+import { resolveCronPayloadOutcome } from "../../../cron/isolated-agent/helpers.js";
+import { decodePostgresError } from "../../../infra/postgres-sync/protocol.js";
+import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
+import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { createMediaGenerationOperation } from "../../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../media-generation-activity.test-support.js";
@@ -39,6 +43,17 @@ function reasoningAssistant(id: string, thinking: string) {
   return buildEmbeddedRunnerAssistant({
     content: [{ type: "thinking", thinking, thinkingSignature }],
   });
+}
+
+function replaySafeTextInput(text: string) {
+  return {
+    assistant: textAssistant(text),
+    attemptOverrides: {
+      assistantTexts: [text],
+      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    },
+    finalAssistantRawText: text,
+  };
 }
 
 describe("terminal resolution", () => {
@@ -138,26 +153,86 @@ describe("terminal resolution", () => {
     expect(resolved.result.meta.suppressErrorNotice).not.toBe(true);
   });
 
-  it("keeps external cancellation ahead of a failed attempt during final result construction", async () => {
-    const assistant = emptyAssistant({ stopReason: "stop" });
-    const attempt = makeEmbeddedRunnerAttempt({
-      terminal: { kind: "failed", source: "prompt", error: new Error("Late provider failure") },
-      lastToolError: { toolName: "exec", error: "Tool execution aborted" },
-      currentAttemptAssistant: assistant,
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    });
-    const terminalState = resolveEmbeddedRunAttemptTerminalState({
-      attempt,
-      assistant,
-      abortSignal: AbortSignal.abort(),
-    });
-    const input = makeTerminalInput({ attempt, terminalState });
-    const resolved = await resolveEmbeddedRunTerminal(input);
-    expectComplete(resolved);
-    expect(resolved.result.meta).toMatchObject({ aborted: true, livenessState: "blocked" });
-    expect(resolved.result.meta.error).toBeUndefined();
-    expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
-  });
+  it.each([
+    [new SqliteWorkerError("private rollback diagnostic", "unavailable"), "unavailable"],
+    [
+      new SqliteWorkerError("private native diagnostic", "outcome-unknown"),
+      "session_actor_reconciliation",
+    ],
+    [
+      decodePostgresError({ name: "error", message: "private native diagnostic", code: "57014" }),
+      "57014",
+    ],
+  ] as const)(
+    "preserves storage guidance through the terminal result and cron (%s)",
+    async (error, code) => {
+      const input = makeTerminalInput({
+        assistant: textAssistant("Completed-looking partial answer."),
+        attemptOverrides: {
+          terminal: { kind: "failed", source: "prompt", error },
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        },
+        payloadsWithToolMedia: [],
+      });
+      expect(classifyGatewayStorageFailure(error)).toBe(code);
+      const resolved = await resolveEmbeddedRunTerminal(input);
+      expectComplete(resolved);
+      expect(resolved.result.meta.error).toMatchObject({
+        kind: "incomplete_turn",
+        fallbackSafe: false,
+      });
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(resolved.result.payloads).toHaveLength(1);
+      expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
+      const cron = resolveCronPayloadOutcome({
+        payloads: resolved.result.payloads ?? [],
+        runLevelError: resolved.result.meta.error,
+        finalAssistantVisibleText: resolved.result.meta.finalAssistantVisibleText,
+        terminalReplyDisposition: resolved.result.meta.terminalReply?.disposition,
+      });
+      expect(cron.hasFatalErrorPayload).toBe(true);
+      for (const text of [
+        resolved.result.meta.error?.message,
+        ...(resolved.result.payloads ?? []).map((payload) => payload.text),
+        cron.summary,
+        cron.embeddedRunError,
+        ...cron.deliveryPayloads.map((p) => p.text),
+      ]) {
+        expect(text).toMatch(/check|reopen|retry/i);
+        expect(text).toMatch(code === "57014" ? /cancel/i : /confirm|saved/i);
+      }
+    },
+  );
+
+  it.each([
+    new Error("Late provider failure"),
+    decodePostgresError({ name: "error", message: "Late database cancellation", code: "57014" }),
+  ])(
+    "keeps external cancellation ahead of a failed attempt during final result construction (%s)",
+    async (error) => {
+      const assistant = emptyAssistant({ stopReason: "stop" });
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: { kind: "failed", source: "prompt", error },
+        lastToolError: { toolName: "exec", error: "Tool execution aborted" },
+        currentAttemptAssistant: assistant,
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      });
+      const terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt,
+        assistant,
+        abortSignal: AbortSignal.abort(),
+      });
+      const input = makeTerminalInput({ attempt, terminalState });
+      const resolved = await resolveEmbeddedRunTerminal(input);
+      expectComplete(resolved);
+      expect(resolved.result.meta).toMatchObject({ aborted: true, livenessState: "blocked" });
+      expect(resolved.result.meta.error).toBeUndefined();
+      expect(resolved.result.payloads ?? []).not.toContainEqual(
+        expect.objectContaining({ isError: true }),
+      );
+      expect(input.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
 
   it("completes NO_REPLY from an internal notification without retrying", async () => {
     const assistant = textAssistant(SILENT_REPLY_TOKEN);
@@ -396,14 +471,8 @@ describe("terminal resolution", () => {
         { text: '{"action":"NO_REPLY"}', silent: false },
         { text: "NO_REPLY The requested result.", silent: false },
       ]) {
-        const assistant = textAssistant(text);
         const input = makeTerminalInput({
-          assistant,
-          attemptOverrides: {
-            assistantTexts: [text],
-            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-          },
-          finalAssistantRawText: text,
+          ...replaySafeTextInput(text),
           payloadsWithToolMedia: silent ? [] : [{ text }],
           runParams: { lane, messageChannel: undefined },
         });
@@ -422,14 +491,8 @@ describe("terminal resolution", () => {
 
   it("surfaces the canonical missing-result outcome for a presentation-hidden acknowledgement", async () => {
     const text = "HEARTBEAT_OK";
-    const assistant = textAssistant(text);
     const input = makeTerminalInput({
-      assistant,
-      attemptOverrides: {
-        assistantTexts: [text],
-        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      },
-      finalAssistantRawText: text,
+      ...replaySafeTextInput(text),
       payloadsWithToolMedia: [{ text }],
       payloadsForVisibleCompletion: [],
       runParams: { terminalReplyExpectation: "result-required" },
@@ -460,14 +523,8 @@ describe("terminal resolution", () => {
     "does not manufacture a missing-result outcome for $name",
     async ({ terminalReplyExpectation, delivered }) => {
       const text = "HEARTBEAT_OK";
-      const assistant = textAssistant(text);
       const input = makeTerminalInput({
-        assistant,
-        attemptOverrides: {
-          assistantTexts: [text],
-          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        },
-        finalAssistantRawText: text,
+        ...replaySafeTextInput(text),
         payloadsWithToolMedia: [{ text }],
         payloadsForVisibleCompletion: [],
         replyDeliveryState: delivered ? "delivered" : "missing",

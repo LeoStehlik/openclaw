@@ -54,6 +54,7 @@ import { cliBackendLog, CLI_BACKEND_LOG_OUTPUT_ENV } from "./log.js";
 import { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import { composeCliPromptContext } from "./prompt-context.js";
 import { resolveCliNoOutputTimeoutMs, resolveCliRunTimeoutOverrideMs } from "./reliability.js";
+import { recordCliModelCompleted, recordCliTrajectoryEvent } from "./trajectory.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 function exactToolAvailabilityError(params: {
@@ -198,11 +199,7 @@ export async function executePreparedCliRun(
       ? [...resolvedArgs, ...context.claudeSkillsPluginArgs]
       : resolvedArgs;
 
-  const cliLiveOwnerKey = buildCliLiveOwnerKey({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-  });
+  const cliLiveOwnerKey = buildCliLiveOwnerKey(params);
   const queueKey = resolveCliRunQueueKey({
     backendId: context.backendResolved.id,
     liveSession: backend.liveSession,
@@ -473,12 +470,7 @@ export async function executePreparedCliRun(
 
         return args;
       };
-      const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
-        config: params.config,
-        lane: params.lane,
-        timeoutMs: params.timeoutMs,
-        runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-      });
+      const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs(params);
       const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
         backend,
         timeoutMs: params.timeoutMs,
@@ -487,6 +479,13 @@ export async function executePreparedCliRun(
         useResume,
         trigger: params.trigger,
       });
+      if (context.trajectoryRecorder) {
+        recordCliTrajectoryEvent(context.trajectoryRecorder, "prompt.submitted", {
+          prompt: sentPrompt,
+          ...(systemPromptArg ? { systemPrompt: systemPromptArg } : {}),
+          imagesCount: imagePayload.imagePaths?.length ?? 0,
+        });
+      }
       runOutput = await executeCliProcess({
         context,
         assertCurrent,
@@ -643,5 +642,8 @@ export async function executePreparedCliRun(
   // Success stays provisional until persistence and cleanup finish; otherwise
   // a rejected turn would be exported as completed.
   diagnostics?.emitCompleted(completedOutput);
+  if (context.trajectoryRecorder) {
+    recordCliModelCompleted(context.trajectoryRecorder, completedOutput);
+  }
   return completedOutput;
 }
