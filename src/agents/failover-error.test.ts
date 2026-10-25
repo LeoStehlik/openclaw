@@ -507,6 +507,12 @@ describe("failover diagnostic isolation", () => {
     });
   });
 
+  it("does not suppress provider failover for non-timeout worker failures", () => {
+    const failure = new WorkerTaskError("worker task timed out", "failed");
+    expect(isNonProviderRuntimeCoordinationError(failure)).toBe(false);
+    expect(resolveModelFallbackError(failure).kind).not.toBe("coordination");
+  });
+
   describe.each(["timeout", "overloaded"] as const)("local worker task %s attribution", (code) => {
     it("keeps local deadlines out of provider classification through wrappers", () => {
       const timeout = new WorkerTaskError(
@@ -529,12 +535,6 @@ describe("failover diagnostic isolation", () => {
         expect(resolveFailoverReasonFromError(error)).toBeNull();
         expect(describeFailoverError(error)).toEqual({ message: timeout.message });
       }
-    });
-
-    it("does not suppress provider failover for non-timeout worker failures", () => {
-      const failure = new WorkerTaskError("worker task timed out", "failed");
-      expect(isNonProviderRuntimeCoordinationError(failure)).toBe(false);
-      expect(resolveModelFallbackError(failure).kind).not.toBe("coordination");
     });
 
     it("keeps provider attribution when an HTTP timeout fact is present", () => {

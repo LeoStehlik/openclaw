@@ -495,16 +495,16 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
 }): ReplyPayload | undefined {
   // Preflight diagnostics are not provider failures. Only explicit public copy
   // can bypass the caller's diagnostic disclosure policy.
+  const message = formatErrorMessage(params.err);
   if (isAgentHarnessPreflightError(params.err) || findLocalWorkerTaskFailure(params.err)) {
     const reply = buildExternalRunFailureReply({
-      message: formatErrorMessage(params.err),
+      message,
       error: params.err,
     });
     return reply.isGenericRunnerFailure
       ? undefined
       : markAgentRunFailureReplyPayload({ text: reply.text });
   }
-  const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const failureSummary = resolveReplyFailureSummary({
     error: params.err,
