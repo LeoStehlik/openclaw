@@ -6,6 +6,10 @@ import {
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
 import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
+import { stripLeadingEmptyLines } from "./strip-leading-empty-lines.js";
+import { trimTextPreservingCode } from "./trim-code-text.js";
+
+export { trimTextPreservingCode };
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -57,11 +61,7 @@ function findTextCheckpoint(
   text: string,
   referenceLength: number,
   resolveOwnership: (text: string) => ReturnType<typeof findCodeOwnership>,
-): {
-  offset: number;
-  context: string;
-  definitions?: ReturnType<typeof findCodeOwnership>["definitions"];
-} {
+) {
   const state = createProtectionScanState();
   let cursor = referenceLength;
   let lastLineStart = cursor;
@@ -77,13 +77,7 @@ function findTextCheckpoint(
       (!inFence && !state.fenceChar && /\[|^ {0,3}=+[ \t]*\r?\n$/.test(line))
     ) {
       const ownership = resolveOwnership(text);
-      // Normalization can expand a label beyond CommonMark's 999-character source limit.
-      // Such definitions stay in source instead of being serialized as carried context.
-      const retain = ownership.definitions.reduce(
-        (offset, { identifier, start }) =>
-          identifier.length > 999 ? Math.min(offset, start) : offset,
-        ownership.retainStart,
-      );
+      const retain = ownership.retainStart;
       const start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
       const completeEnd = text.lastIndexOf("\n") + 1;
       if (
@@ -118,6 +112,7 @@ function createCheckpointTransform(
   let sourceLength = 0;
   let pending = "";
   let settled = "";
+  let settledMatchesSource = true;
   let previousTail = "";
   let context = "";
   let references = "";
@@ -126,7 +121,12 @@ function createCheckpointTransform(
   let ownershipSource = "";
   let ownership: ReturnType<typeof findCodeOwnership> | undefined;
   const resolveOwnership = (text: string) => {
-    if (ownership && canReuseMarkdownOwnership(ownershipSource, text, ownership)) {
+    // Code ranges can stay unchanged while a completed list item advances settlement.
+    if (
+      ownership &&
+      !text.includes("\n", ownershipSource.length) &&
+      canReuseMarkdownOwnership(ownershipSource, text, ownership)
+    ) {
       ownershipSource = text;
       return ownership;
     }
@@ -147,7 +147,9 @@ function createCheckpointTransform(
     const boundary = findTextCheckpoint(text, references.length, resolveOwnership);
     const result = project(text, boundary.offset);
     const window = result.text.slice(contextLength);
-    const visible = settled + window;
+    // Reuse unchanged source bytes: comparing separately built cumulative ropes
+    // for identity would flatten the whole reply on every append.
+    const visible = settledMatchesSource && result.text === text ? source : settled + window;
     // `settled` only grows, so while the stage kept emitting this transform's output the
     // delta extends the previous visible text exactly when it extends the previous tail.
     // A stream that skipped this transform (activation just flipped, or an upstream
@@ -168,7 +170,9 @@ function createCheckpointTransform(
     // A provisional tool call can retain text before the Markdown checkpoint.
     let retain = 0;
     if (boundary.offset > contextLength && result.retainStart === boundary.offset) {
-      settled += result.text.slice(contextLength, result.retainedOutputStart);
+      const added = result.text.slice(contextLength, result.retainedOutputStart);
+      settledMatchesSource &&= added === pending.slice(0, boundary.offset - contextLength);
+      settled += added;
       retain = Math.max(0, result.retainedOutputStart - contextLength);
       for (const definition of boundary.definitions ?? []) {
         if (definition.end <= boundary.offset && !definitions.has(definition.identifier)) {
@@ -287,35 +291,6 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   };
 }
 
-/** Trim surrounding padding without removing Markdown block indentation. */
-export function trimTextPreservingCode(
-  text: string,
-  mode: "start" | "both" = "both",
-  codeRegions?: ReturnType<typeof findCodeRegions>,
-): string {
-  let trimmed = text.trimStart();
-  if (trimmed && trimmed.length !== text.length) {
-    const contentStart = text.length - trimmed.length;
-    const leadingCode = (codeRegions ?? findCodeRegions(text)).find(
-      (region) =>
-        (region.block || (codeRegions && region.start === 0)) &&
-        region.start <= contentStart &&
-        contentStart < region.end,
-    );
-    if (leadingCode) {
-      trimmed = text.slice(leadingCode.start);
-    }
-  }
-  if (mode === "both") {
-    const contentEnd = text.trimEnd().length;
-    if (codeRegions?.some((region) => region.start <= contentEnd && region.end === text.length)) {
-      return trimmed;
-    }
-    return trimmed.trimEnd();
-  }
-  return trimmed;
-}
-
 export function trimTextFilter(
   mode: "none" | "start" | "both",
   options?: { preserveCodeIndentation?: boolean },
@@ -366,10 +341,6 @@ export function trimTextFilter(
       };
     },
   };
-}
-
-function stripLeadingEmptyLines(text: string): string {
-  return text.trim() ? text.replace(/^(?:[ \t]*\r?\n)+/, "") : "";
 }
 
 export const leadingEmptyLinesTextFilter: TextFilter = {

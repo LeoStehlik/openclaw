@@ -1,39 +1,123 @@
 import type { Locator, Page } from "playwright";
 import type { ConfigSchemaResponse, CronJob } from "../../ui/src/api/types.ts";
-import { pathForRoute } from "../../ui/src/app-route-paths.ts";
+import { pathForAgentPanel, pathForRoute } from "../../ui/src/app-route-paths.ts";
+import { createSkill } from "../../ui/src/pages/skills/view.test-support.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
   controlUiSessionPath,
+  defaultControlUiFeatureMethods,
   type ControlUiMockGatewayScenario,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../../ui/src/test-helpers/control-ui-navigation.ts";
 import { cronListResponseFixture } from "../../ui/src/test-helpers/cron.ts";
+import { meetingStatus } from "../../ui/src/test-helpers/transcripts.test-support.ts";
 
 const sessionKeys = ["agent:main:interaction-a", "agent:main:interaction-b"] as const;
 const sessionQuery = "Interaction 0999";
 const modelQuery = "Warm model 0999";
 const cronQuery = "Warm automation 0499";
 const activePane = ".chat-pane-cache__pane--active";
+const sidebarClocks = ".sidebar-recent-session openclaw-elapsed-time";
+const initialClockLabels = new WeakMap<Page, string>();
+const progressClockSessions = Array.from(
+  { length: 6 },
+  (_, index) => sessionKeys[index] ?? `agent:main:interaction-${index}`,
+);
+const progressClocks =
+  'openclaw-session-progress-widget [data-progress-card-placement="board"] time';
+const initialProgressClocks = new WeakMap<Page, { count: number; labels: string[] }>();
+
+type InteractionFixtureOptions = {
+  runningSessions?: boolean;
+  longSessionLabels?: boolean;
+  progressCardClocks?: boolean;
+};
 
 export type InteractionScenario = {
   id: string;
   route: string;
   expected: string;
+  fixture?: InteractionFixtureOptions;
+  /** Resource campaigns opt into the longer inventory and idle scenarios. */
+  resourceOnly?: boolean;
+  visibility?: "hidden";
+  /** Count newly inserted rows across the action, including transient replacements. */
+  rowSelector?: string;
   prepare: (page: Page, gateway: MockGatewayControls) => Promise<void>;
   run: (page: Page, gateway: MockGatewayControls) => Promise<void>;
 };
 
-export function createInteractionFixture(buildId: string, version: string) {
-  const sessions = Array.from({ length: 1_000 }, (_, index) => ({
-    key: sessionKeys[index] ?? `agent:main:interaction-${index}`,
-    sessionId: `interaction-session-${index}`,
-    agentId: "main",
-    kind: "direct" as const,
-    label: `Interaction ${String(index).padStart(4, "0")}`,
-    updatedAt: 1_800_000_000_000 - index * 1_000,
-    childOwnerSessionKeys: [],
+function progressClockResponses(updatedAt: number, revision = 1) {
+  return {
+    cases: [
+      ...progressClockSessions.map((sessionKey, index) => ({
+        match: { sessionKey },
+        response: {
+          card: {
+            sessionKey,
+            revision,
+            updatedAt,
+            markdown: `**Verification ${index + 1}**: review the synthetic deployment.`,
+            steps: [
+              { step: "Inspect the change", status: "completed" },
+              { step: "Check the verification record", status: "in_progress" },
+            ],
+          },
+        },
+      })),
+      { response: { card: null } },
+    ],
+  };
+}
+
+export function createInteractionFixture(
+  buildId: string,
+  version: string,
+  options: InteractionFixtureOptions = {},
+) {
+  const captureSources = ["Alpha", "Beta"].map((title) => ({
+    providerId: "test-voice",
+    guildId: "guild",
+    channelId: title.toLowerCase(),
+    title,
   }));
+  const config = { transcripts: { enabled: true, autoStart: captureSources } };
+  const keyForIndex = (index: number) => sessionKeys[index] ?? `agent:main:interaction-${index}`;
+  const startedAt = options.runningSessions ? Date.now() - 5_000 : undefined;
+  const sessions = Array.from({ length: 1_000 }, (_, index) => {
+    const runningChild = options.runningSessions && index > 0 && index <= 200;
+    return {
+      key: keyForIndex(index),
+      sessionId: `interaction-session-${index}`,
+      agentId: "main",
+      kind: "direct" as const,
+      label:
+        `Interaction ${String(index).padStart(4, "0")}` +
+        (options.longSessionLabels
+          ? " — investigate the synthetic deployment and review the complete verification record"
+          : ""),
+      updatedAt: 1_800_000_000_000 - index * 1_000,
+      childOwnerSessionKeys: runningChild ? [sessionKeys[0]] : [],
+      ...(options.runningSessions && index === 0
+        ? {
+            childSessions: Array.from({ length: 200 }, (_childValue, child) =>
+              keyForIndex(child + 1),
+            ),
+          }
+        : {}),
+      ...(runningChild
+        ? {
+            startedAt,
+            hasActiveRun: true,
+            activeRunIds: [`interaction-run-${index}`],
+            status: "running" as const,
+            spawnedBy: sessionKeys[0],
+            parentSessionKey: sessionKeys[0],
+          }
+        : {}),
+    };
+  });
   const jobs: CronJob[] = Array.from({ length: 500 }, (_, index) => ({
     id: `interaction-job-${index}`,
     name: `Warm automation ${String(index).padStart(4, "0")}`,
@@ -69,6 +153,19 @@ export function createInteractionFixture(buildId: string, version: string) {
     serverBuildId: buildId,
     serverVersion: version,
     sessionKey: sessionKeys[0],
+    ...(options.progressCardClocks
+      ? {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "board.get",
+            "progressCard.get",
+            "sessions.list",
+          ],
+          controlUiWidgetKinds: [
+            { pluginId: "session", kind: "session:progress", label: "Session progress" },
+          ],
+        }
+      : {}),
     agentModel: "example/model-0",
     sessions,
     sessionTranscripts: Object.fromEntries(
@@ -97,7 +194,96 @@ export function createInteractionFixture(buildId: string, version: string) {
         version: "interaction-config",
         generatedAt: "2026-10-23T00:00:00.000Z",
       } satisfies ConfigSchemaResponse,
-      "progressCard.get": { card: null },
+      "progressCard.get": options.progressCardClocks
+        ? progressClockResponses(Date.now() - 45_000)
+        : { card: null },
+      ...(options.progressCardClocks
+        ? {
+            "board.get": {
+              sessionKey: sessionKeys[0],
+              revision: 1,
+              tabs: [{ tabId: "main", title: "Verification", position: 0, chatDock: "right" }],
+              widgets: progressClockSessions.map((sessionKey, index) => ({
+                name: `verification-progress-${index}`,
+                tabId: "main",
+                title: `Verification ${index + 1}`,
+                contentKind: "plugin",
+                pluginKind: "session:progress",
+                props: { sessionKey },
+                sizeW: 4,
+                sizeH: 3,
+                position: index,
+                grantState: "none",
+                revision: 1,
+              })),
+            },
+          }
+        : {}),
+      "config.get": {
+        config,
+        sourceConfig: config,
+        hash: "interaction-config",
+        raw: JSON.stringify(config),
+        valid: true,
+        issues: [],
+      },
+      "transcripts.status": {
+        ...meetingStatus,
+        configuredSources: captureSources.map((source) =>
+          Object.assign({}, meetingStatus.configuredSources[0], { source, title: source.title }),
+        ),
+      },
+      "skills.status": {
+        workspaceDir: "/synthetic/workspace",
+        managedSkillsDir: "/synthetic/skills",
+        skills: ["Alpha", "Beta"].map((name) =>
+          createSkill({
+            name,
+            skillKey: name.toLowerCase(),
+            primaryEnv: undefined,
+            missing: { bins: ["synthetic-bin"], anyBins: [], env: [], config: [], os: [] },
+            blockedByAgentFilter: true,
+          }),
+        ),
+      },
+      "sessions.storage.status": {
+        agents: ["main", "research"].map((agentId) => ({
+          agentId,
+          storePath: `/synthetic/${agentId}.sqlite`,
+          hotTranscripts: 7,
+          coldTranscripts: 0,
+          databaseBytes: 4096,
+          walBytes: 0,
+          archiveBytes: 0,
+          embeddedArchiveBytes: 0,
+        })),
+        maintenance: {
+          running: false,
+          lastStartedAt: null,
+          lastCompletedAt: null,
+          lastError: null,
+          archivedTranscripts: 0,
+          externalizedTranscripts: 0,
+        },
+      },
+      "models.authStatus": {
+        ts: 1_800_000_000_000,
+        providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
+      },
+      "usage.status": {
+        updatedAt: 1_800_000_000_000,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [
+              { label: "5h", usedPercent: 25 },
+              { label: "Weekly", usedPercent: 40 },
+            ],
+            billing: [{ type: "balance", amount: 12, unit: "credits" }],
+          },
+        ],
+      },
       "cron.list": cronListResponseFixture([
         ...cronCases,
         ...Array.from({ length: 10 }, (_, index) => ({
@@ -182,10 +368,195 @@ async function prepareChat(page: Page) {
   await frames(page);
 }
 
+async function prepareProgressClocks(page: Page, gateway: MockGatewayControls) {
+  await prepareChat(page);
+  const pane = page.locator(activePane);
+  const mobileHeader = pane.locator(".agent-chat__header--mobile");
+  const mobile = await mobileHeader.isVisible();
+  const toggle = (mobile ? mobileHeader : pane.locator(".sidebar-region__panels-toggle")).getByRole(
+    "button",
+    { name: "Panels", exact: true },
+  );
+  if (mobile) {
+    const host = pane.locator(".chat-mobile-host");
+    if (!(await host.isVisible())) {
+      await toggle.click();
+    }
+    await host.getByRole("button", { name: "Panels", exact: true }).click();
+    await host
+      .locator(".chat-panel-launcher-mobile")
+      .getByRole("button", { name: "Dashboard", exact: true })
+      .click();
+  } else {
+    if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+      await toggle.click();
+    }
+    await pane
+      .locator(".side-panel-launcher")
+      .getByRole("button")
+      .filter({
+        has: page
+          .getByText("Dashboard", { exact: true })
+          .and(page.locator(".side-panel-type-option__label")),
+      })
+      .click();
+  }
+
+  await gateway.waitForRequest("board.get", { match: { sessionKey: sessionKeys[0] } });
+  await page.waitForFunction(
+    ({ selector, expected }) => {
+      const widgets = [
+        ...document.querySelectorAll<HTMLElement & { active: boolean }>(
+          "openclaw-session-progress-widget",
+        ),
+      ];
+      return (
+        widgets.length === expected &&
+        widgets.every(
+          (widget) =>
+            widget.active &&
+            !widget.querySelector(
+              '.board-widget__plugin-loading, [data-test-id="session-progress-error"]',
+            ),
+        ) &&
+        document.querySelectorAll(selector).length === expected
+      );
+    },
+    { selector: progressClocks, expected: progressClockSessions.length },
+  );
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(viewport.width - 4, viewport.height - 4);
+  await settleSidebarBackgroundWork(page);
+  // Start each sample near a minute boundary without replacing the native clock.
+  const updatedAt = Date.now() - 45_000;
+  await gateway.setMethodResponse("progressCard.get", progressClockResponses(updatedAt, 2));
+  for (const sessionKey of progressClockSessions) {
+    await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
+  }
+  await page.waitForFunction(
+    ({ selector, datetime }) => {
+      const clocks = [...document.querySelectorAll(selector)];
+      return (
+        clocks.length >= 2 &&
+        clocks.every(
+          (clock) =>
+            clock.getAttribute("datetime") === datetime &&
+            clock.textContent?.trim() === "Updated just now",
+        )
+      );
+    },
+    { selector: progressClocks, datetime: new Date(updatedAt).toISOString() },
+  );
+  // The accepted progress refresh also updates the active chat's persisted snapshot.
+  await settleSidebarBackgroundWork(page);
+  const clocks = page.locator(progressClocks);
+  initialProgressClocks.set(page, {
+    count: await clocks.count(),
+    labels: await clocks.allTextContents(),
+  });
+}
+
 async function prepareSessionSwitch(page: Page) {
   await prepareChat(page);
   await switchSession(page, 1);
   await switchSession(page, 0);
+}
+
+async function prepareSidebarInventory(page: Page, gateway: MockGatewayControls) {
+  await prepareChat(page);
+  await navigation(page, "sessions");
+  const more = page.locator(
+    ".sidebar-session-pagination--roster > .sidebar-session-pagination__button",
+  );
+  for (const offset of [200, 400, 600, 800]) {
+    await more.click();
+    await gateway.waitForRequest("sessions.list", {
+      match: { source: "sidebar", offset, limit: 200 },
+    });
+    await frames(page);
+  }
+  await more.waitFor({ state: "hidden" });
+}
+
+async function settleSidebarBackgroundWork(page: Page) {
+  // Only New Session warms automatically; optional groups require user intent.
+  const prefetchAssets = await page.evaluate(async () => {
+    const descriptor = document
+      .getElementById("openclaw-navigation-preloads")
+      ?.getAttribute("content");
+    const route = window.openclawControlUi?.snapshot().route?.matches[0]?.routeId;
+    if (!descriptor || !route) {
+      throw new Error("Warm sidebar measurement requires the built navigation prefetch manifest");
+    }
+    // The fixture server mounts resources at /; deep-link entry-script aliases differ.
+    const base = new URL("/", location.origin);
+    const response = await fetch(new URL(descriptor, base));
+    if (!response.ok) {
+      throw new Error("Could not read the built navigation prefetch manifest");
+    }
+    const manifest: Record<string, string[]> = await response.json();
+    return [...new Set(route === "new-session" ? [] : manifest["new-session"])].map(
+      (file) => new URL(file, base).href,
+    );
+  });
+  try {
+    await page.waitForFunction(
+      (assets) => {
+        const fetched = new Set(
+          performance.getEntriesByType("resource").map((entry) => entry.name),
+        );
+        return assets.every((asset) => fetched.has(asset));
+      },
+      prefetchAssets,
+      { timeout: 60_000, polling: 100 },
+    );
+  } catch (error) {
+    const missing = await page.evaluate((assets) => {
+      const fetched = new Set(performance.getEntriesByType("resource").map((entry) => entry.name));
+      return assets.filter((asset) => !fetched.has(asset));
+    }, prefetchAssets);
+    throw new Error(`Warm navigation prefetch did not finish: ${missing.join(", ")}`, {
+      cause: error,
+    });
+  }
+  // Cross the snapshot owner's 500 ms debounce and idle turn, including oversized cache refusals.
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
+      }),
+  );
+  await page.waitForLoadState("networkidle");
+  await frames(page);
+}
+
+async function prepareSidebarResources(page: Page, gateway: MockGatewayControls) {
+  await prepareSidebarInventory(page, gateway);
+  const showMore = page.locator(
+    '.sidebar-session-pagination__button[aria-label="Show more"]:visible',
+  );
+  // Section pagination reveals ten of the already-loaded 1,000 rows per click.
+  for (let pageIndex = 0; pageIndex < 100 && (await showMore.count()); pageIndex++) {
+    await showMore.first().click();
+    await frames(page);
+  }
+  await showMore.waitFor({ state: "hidden" });
+  await page
+    .locator(".sidebar-shell__body")
+    .first()
+    .evaluate((element) => {
+      element.scrollTop = 0;
+    });
+  await frames(page);
+  const label = page.locator(".sidebar-recent-session__name.hover-marquee").first();
+  await label.waitFor({ state: "visible" });
+  if (!(await label.textContent())?.includes("synthetic deployment")) {
+    throw new Error("Resource scenario requires the long-label 1,000-session fixture");
+  }
+  // Leave the pointer away from rows; idle measurements must not include a hovered marquee.
+  const viewport = page.viewportSize()!;
+  await page.mouse.move(viewport.width - 4, viewport.height - 4);
+  await settleSidebarBackgroundWork(page);
 }
 
 async function routeLink(page: Page, route: "sessions" | "cron") {
@@ -257,6 +628,16 @@ async function prepareSessions(page: Page, gateway: MockGatewayControls) {
   await frames(page);
 }
 
+async function refreshSessions(page: Page, gateway: MockGatewayControls) {
+  const after = (await gateway.getRequests("sessions.list", { source: "sessions-page" })).length;
+  await page.locator(".sessions-toolbar__refresh").click();
+  await gateway.waitForRequest("sessions.list", { after, match: { source: "sessions-page" } });
+  await page.waitForFunction(
+    () => !document.querySelector<HTMLButtonElement>(".sessions-toolbar__refresh")?.disabled,
+  );
+  await frames(page);
+}
+
 async function prepareCron(page: Page) {
   await page.locator(".cron-table__row").first().waitFor();
   const more = page.getByRole("button", { name: "Load more", exact: true });
@@ -306,9 +687,286 @@ async function searchModels(page: Page) {
 
 export const interactionScenarios: readonly InteractionScenario[] = [
   {
+    id: "sidebar-resources-scroll-resize",
+    route: controlUiSessionPath(sessionKeys[0]),
+    fixture: { longSessionLabels: true },
+    resourceOnly: true,
+    expected:
+      "The 1,000-session sidebar reaches its final row, survives a viewport resize, and returns to its first row.",
+    rowSelector: ".sidebar-recent-session",
+    prepare: prepareSidebarResources,
+    run: async (page) => {
+      const scroller = page.locator(".sidebar-shell__body").first();
+      const viewport = page.viewportSize()!;
+      for (const fraction of [0.25, 0.5, 0.75, 1]) {
+        await scroller.evaluate((element, position) => {
+          element.scrollTop = (element.scrollHeight - element.clientHeight) * position;
+        }, fraction);
+        await frames(page);
+      }
+      await page
+        .locator('.sidebar-recent-session[data-session-key="agent:main:interaction-999"]')
+        .waitFor({ state: "visible" });
+      if ((await scroller.evaluate((element) => element.scrollTop)) <= 0) {
+        throw new Error("The sidebar did not scroll through its loaded inventory");
+      }
+      await page.setViewportSize({ width: viewport.width + 48, height: viewport.height });
+      await frames(page);
+      await page.setViewportSize(viewport);
+      await scroller.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await page
+        .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[0]}"]`)
+        .waitFor({ state: "visible" });
+      await frames(page);
+    },
+  },
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `sidebar-resources-idle-${visibility}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    fixture: { longSessionLabels: true },
+    resourceOnly: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    expected: `The 1,000-session sidebar remains mounted and ${visibility} for three native-clock idle seconds.`,
+    prepare: prepareSidebarResources,
+    run: async (page) => {
+      const state = () => page.evaluate(() => document.visibilityState);
+      if ((await state()) !== visibility) {
+        throw new Error(`Expected a ${visibility} page before the idle interval`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 3_000);
+      });
+      if (
+        (await state()) !== visibility ||
+        !(await page.locator(".sidebar-recent-session").count())
+      ) {
+        throw new Error(`Sidebar or ${visibility} state changed during the idle interval`);
+      }
+    },
+  })),
+  {
+    id: "progress-card-clock-tick",
+    route: controlUiSessionPath(sessionKeys[0]),
+    fixture: { progressCardClocks: true },
+    resourceOnly: true,
+    expected:
+      "Mounted progress widgets in the 400-message chat retain their clocks and advance after a native 30-second tick.",
+    rowSelector: progressClocks,
+    prepare: prepareProgressClocks,
+    run: async (page) => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 31_500);
+      });
+      const initial = initialProgressClocks.get(page)!;
+      const clocks = page.locator(progressClocks);
+      const labels = await clocks.allTextContents();
+      if (
+        (await page.evaluate(() => document.visibilityState)) !== "visible" ||
+        labels.length !== initial.count ||
+        labels.some((label, index) => !label.trim() || label === initial.labels[index])
+      ) {
+        throw new Error(
+          "Mounted progress clocks must remain attached and advance while the page is visible",
+        );
+      }
+      initialProgressClocks.delete(page);
+    },
+  },
+  ...(["visible", "hidden"] as const).map((visibility): InteractionScenario => ({
+    id: `progress-card-clock-idle-${visibility}`,
+    route: controlUiSessionPath(sessionKeys[0]),
+    fixture: { progressCardClocks: true },
+    resourceOnly: true,
+    visibility: visibility === "hidden" ? visibility : undefined,
+    expected: `The actual mounted progress-clock count is retained during ${visibility} native-clock idle.`,
+    rowSelector: progressClocks,
+    prepare: prepareProgressClocks,
+    run: async (page) => {
+      const state = () => page.evaluate(() => document.visibilityState);
+      if ((await state()) !== visibility) {
+        throw new Error(`Expected a ${visibility} page before progress-clock idle`);
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, visibility === "hidden" ? 31_500 : 3_000);
+      });
+      const initial = initialProgressClocks.get(page)!;
+      if (
+        (await state()) !== visibility ||
+        (await page.locator(progressClocks).count()) !== initial.count
+      ) {
+        throw new Error(`Mounted progress clocks or ${visibility} state changed while idle`);
+      }
+      initialProgressClocks.delete(page);
+    },
+  })),
+  {
+    id: "sidebar-clock-idle",
+    route: "/new",
+    fixture: { runningSessions: true },
+    expected: "At least 100 running child-session clocks advance during five idle seconds.",
+    rowSelector: sidebarClocks,
+    prepare: async (page) => {
+      await navigation(page, "sessions");
+      const toggle = page.locator(`[data-child-session-toggle="${sessionKeys[0]}"]`);
+      await toggle.waitFor();
+      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+        await toggle.click();
+      }
+      await page.locator(sidebarClocks).first().waitFor({ state: "attached" });
+      const more = page.locator(`[data-show-more-children="${sessionKeys[0]}"]`);
+      if ((await page.locator(sidebarClocks).count()) < 100 && (await more.count()) > 0) {
+        await more.click();
+      }
+      await page.waitForFunction(
+        (selector) => document.querySelectorAll(selector).length >= 100,
+        sidebarClocks,
+      );
+      const viewport = page.viewportSize()!;
+      await page.mouse.move(viewport.width - 8, viewport.height - 8);
+      await page.locator('[role="tooltip"]:visible').first().waitFor({ state: "hidden" });
+      await settleSidebarBackgroundWork(page);
+      const label = await page.locator(sidebarClocks).first().textContent();
+      if (!label?.trim()) {
+        throw new Error("Running sidebar clocks must have an initial elapsed label");
+      }
+      initialClockLabels.set(page, label);
+    },
+    run: async (page) => {
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, 5_000);
+          }),
+      );
+      const clocks = page.locator(sidebarClocks);
+      const label = await clocks.first().textContent();
+      if (
+        (await clocks.count()) < 100 ||
+        !label?.trim() ||
+        label === initialClockLabels.get(page)
+      ) {
+        throw new Error("At least 100 running sidebar clocks must remain mounted and advance");
+      }
+      initialClockLabels.delete(page);
+    },
+  },
+  {
+    id: "agent-skills-refresh",
+    route: pathForAgentPanel("main", "skills"),
+    expected: "Refreshing the agent's skills retains both rows and their diagnostics.",
+    rowSelector: ".agent-skill-row, .agent-skill-row .settings-row__desc",
+    prepare: async (page) => {
+      await page.locator(".agent-skill-row").first().waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("skills.status")).length;
+      const section = page.locator(".settings-section").filter({
+        has: page.locator('input[name="agent-skills-filter"]'),
+      });
+      await section.getByRole("button", { name: "Refresh", exact: true }).click();
+      await gateway.waitForRequest("skills.status", { after });
+      await frames(page);
+    },
+  },
+  {
+    id: "meeting-health-refresh",
+    route: `${pathForRoute("communications")}?section=transcripts#settings-communications-meeting-capture`,
+    expected: "Refreshing capture health retains source controls and health rows.",
+    rowSelector: "openclaw-meeting-capture-settings .settings-row",
+    prepare: async (page) => {
+      await page
+        .locator('openclaw-meeting-capture-settings [aria-label="Edit source 1"]')
+        .waitFor();
+      await page.getByText("Applied source state", { exact: true }).waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("transcripts.status")).length;
+      await page
+        .locator("openclaw-meeting-capture-settings")
+        .getByRole("button", { name: "Refresh", exact: true })
+        .click();
+      await gateway.waitForRequest("transcripts.status", { after });
+      await frames(page);
+    },
+  },
+  {
+    id: "cron-refresh",
+    route: pathForRoute("cron"),
+    expected: "Refreshing the first automation page retains unchanged job rows.",
+    rowSelector: ".cron-table__row",
+    prepare: async (page, gateway) => inventoryReady(page, gateway, "cron"),
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("cron.list")).length;
+      await page.locator(".cron-refresh").click();
+      await gateway.waitForRequest("cron.list", { after });
+      await page.waitForFunction(
+        () => document.querySelector(".cron-table")?.getAttribute("aria-busy") !== "true",
+      );
+      await frames(page);
+    },
+  },
+  {
+    id: "provider-usage-refresh",
+    route: pathForRoute("model-providers"),
+    expected: "Refreshing provider usage retains the plan windows and billing rows.",
+    rowSelector:
+      ".provider-usage__group, .provider-usage__window, .provider-usage__row, .provider-usage__chip",
+    prepare: async (page) => {
+      const summary = page.locator('[data-provider-id="openai"] .provider-row__summary');
+      await summary.waitFor();
+      if ((await summary.getAttribute("aria-expanded")) !== "true") {
+        await summary.click();
+      }
+      await page.locator(".provider-usage__window").first().waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("usage.status")).length;
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await gateway.waitForRequest("usage.status", { after });
+      await frames(page);
+    },
+  },
+  {
+    id: "storage-refresh",
+    route: `${pathForRoute("ai-agents")}?section=session#settings-session-storage`,
+    expected: "An unchanged storage refresh retains both agent rows and the open disclosure.",
+    rowSelector: "openclaw-session-storage-settings details > .settings-row",
+    prepare: async (page) => {
+      const details = page.locator(
+        "openclaw-session-storage-settings details.settings-row--stacked",
+      );
+      await details.locator("summary").click();
+      await details.getByText("research", { exact: true }).waitFor();
+    },
+    run: async (page, gateway) => {
+      const after = (await gateway.getRequests("sessions.storage.status")).length;
+      const section = page.locator("openclaw-session-storage-settings");
+      await section.getByRole("button", { name: "Refresh", exact: true }).click();
+      await gateway.waitForRequest("sessions.storage.status", { after });
+      await section.getByRole("button", { name: "Refresh", exact: true }).waitFor();
+      await frames(page);
+    },
+  },
+  {
+    id: "sessions-refresh",
+    route: pathForRoute("sessions"),
+    expected: "Refreshing retains all visible sessions and expanded detail statistics.",
+    rowSelector: ".sessions-table .session-data-row, .session-detail-stat",
+    prepare: async (page, gateway) => {
+      await prepareSessions(page, gateway);
+      await refreshSessions(page, gateway);
+      await page.locator(".session-details-toggle").first().click();
+      await page.locator(".session-detail-stat").first().waitFor();
+    },
+    run: refreshSessions,
+  },
+  {
     id: "session-switch",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "Both retained 400-message transcripts become visible in turn.",
+    rowSelector: "[data-virtual-row-key], .sidebar-recent-session",
     prepare: prepareSessionSwitch,
     run: async (page) => {
       await switchSession(page, 1);
@@ -336,21 +994,7 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     id: "sidebar-toggle",
     route: controlUiSessionPath(sessionKeys[0]),
     expected: "The 1,000-session sidebar closes and reopens.",
-    prepare: async (page, gateway) => {
-      await prepareChat(page);
-      await navigation(page, "sessions");
-      const more = page.locator(
-        ".sidebar-session-pagination--roster > .sidebar-session-pagination__button",
-      );
-      for (const offset of [200, 400, 600, 800]) {
-        await more.click();
-        await gateway.waitForRequest("sessions.list", {
-          match: { source: "sidebar", offset, limit: 200 },
-        });
-        await frames(page);
-      }
-      await more.waitFor({ state: "hidden" });
-    },
+    prepare: prepareSidebarInventory,
     run: async (page) => {
       if (await page.locator(".shell--mobile-nav").count()) {
         await page.keyboard.press("Escape");
@@ -429,6 +1073,45 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await page.locator(`${activePane} [data-chat-model-select]`).click();
       await searchModels(page);
+    },
+  },
+  {
+    id: "model-picker-navigate",
+    route: controlUiSessionPath(sessionKeys[0]),
+    expected: "Keyboard navigation advances through model choices and returns to the selected row.",
+    prepare: async (page) => {
+      await prepareModelPicker(page);
+      await page.locator(`${activePane} [data-chat-model-select]`).click();
+      await page.locator("[data-chat-model-search]").waitFor();
+      await frames(page);
+    },
+    run: async (page) => {
+      const search = page.locator("[data-chat-model-search]");
+      const initial = await search.getAttribute("aria-activedescendant");
+      if (!initial) {
+        throw new Error("Expected the selected model to be the initial active descendant");
+      }
+      await search.press("ArrowDown");
+      await page.waitForFunction(
+        (id) =>
+          document
+            .querySelector("[data-chat-model-search]")
+            ?.getAttribute("aria-activedescendant") !== id,
+        initial,
+      );
+      for (let index = 0; index < 9; index++) {
+        await search.press("ArrowDown");
+      }
+      for (let index = 0; index < 10; index++) {
+        await search.press("ArrowUp");
+      }
+      await page.waitForFunction(
+        (id) =>
+          document
+            .querySelector("[data-chat-model-search]")
+            ?.getAttribute("aria-activedescendant") === id,
+        initial,
+      );
     },
   },
   {
