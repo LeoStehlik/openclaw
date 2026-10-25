@@ -22,18 +22,18 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
+import {
+  isInternalCanvasEntryUrl,
+  resolveCanvasIframeUrl,
+  resolveEmbedSandbox,
+  type EmbedSandboxMode,
+} from "../../../lib/chat/canvas-embed-policy.ts";
 import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type {
   CanvasToolPreview,
   ToolPreview as ToolPreviewModel,
 } from "../../../lib/chat/tool-cards.ts";
-import {
-  isInternalCanvasEntryUrl,
-  resolveCanvasIframeUrl,
-  resolveEmbedSandbox,
-  type EmbedSandboxMode,
-} from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -42,7 +42,7 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme, registerWidgetThemeFrame } from "../../../lib/widget-theme.ts";
-import { BrowserTabCardHost } from "./browser-tab-card.tsx";
+import "./browser-tab-card.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   WidgetCardMenu,
@@ -60,6 +60,10 @@ registerMcpAppEnglish();
 
 const YouTubeVideoCard = lazy(() => import("./youtube-video-card.tsx"), {
   export: "YouTubeVideoCard",
+});
+
+const BrowserTabCardHost = lazy(() => import("./browser-tab-card.tsx"), {
+  export: "BrowserTabCardHost",
 });
 
 const CanvasWidgetMount = lazy(() => import("./canvas-widget-mount.tsx"), {
@@ -714,7 +718,11 @@ export function ToolPreview(props: ToolPreviewProps) {
         </Show>
       }
     >
-      {(preview) => <BrowserTabCardHost preview={preview()} latest={false} />}
+      {(preview) => (
+        <ChatLazyBoundary>
+          <BrowserTabCardHost preview={preview()} latest={false} />
+        </ChatLazyBoundary>
+      )}
     </Show>
   );
 }
