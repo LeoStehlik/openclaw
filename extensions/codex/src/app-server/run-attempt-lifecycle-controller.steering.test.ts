@@ -152,9 +152,13 @@ describe("Codex steering terminal delivery", () => {
       h.pendingOpenClawDynamicToolCompletionIds.delete(results[1].call.callId);
       h.controller.scheduleTerminalDynamicToolReleaseCheck();
       await yieldImmediate();
-      expect(h.state.completed).toBe(true);
-      expect(h.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
+      // Upstream terminal release drains submitted input before interrupting.
+      expect(h.state.completed).toBe(false);
+      expect(h.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+      expect(h.steeringQueue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
       await outcome;
+      await vi.waitFor(() => expect(h.state.completed).toBe(true));
+      expect(h.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(true);
     },
   );
 });

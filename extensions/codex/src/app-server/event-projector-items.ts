@@ -1,6 +1,11 @@
 import { readStringField as readItemString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThreadItem } from "./protocol.js";
 
+export type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
+  phase?: unknown;
+  delivery?: unknown;
+};
+
 export type CodexNativeToolAuditStatus = ReturnType<typeof itemStatus> | "cancelled" | "unknown";
 export type CodexNativeToolUnfinishedStatus = Extract<
   CodexNativeToolAuditStatus,

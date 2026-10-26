@@ -15,21 +15,17 @@ import {
 } from "./event-projector-assistant-message.js";
 import {
   createAssistantItemSuppression,
+  type AssistantCompletion,
   shouldAdvancePersistableAssistantBarrier,
   shouldClearTerminalPresentationForNativeItem,
 } from "./event-projector-items.js";
 import { CodexSteeringAssistantSegments } from "./event-projector-steering.js";
-import { extractRawResponseItemText } from "./event-projector-values.js";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexAssistantItemIds } from "./upstream-prompt-provenance.js";
 
 type AgentEvent = Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0];
 type AnswerCandidateStatus = "candidate" | "superseded" | "selected";
-type AssistantCompletion = Pick<CodexThreadItem, "type" | "id" | "text"> & {
-  phase?: unknown;
-  delivery?: unknown;
-};
 
 export class CodexAssistantProjection {
   readonly assistantTextByItem = new Map<string, string>();
@@ -67,6 +63,8 @@ export class CodexAssistantProjection {
   private responseModel: string | undefined;
   // Native handoffs retire earlier finals; terminal summaries contain only the last answer.
   private persistableAssistantBarrier = 0;
+  // Stable partial answers survive native work, but not a completed transcript mirror.
+  private persistedAssistantBarrier = 0;
   // A completed answer mirrored before a steer is already durable. Do not
   // replay it as the enclosing turn's terminal answer if Codex emits no coda.
   private persistedAssistantBoundary = false;
@@ -123,10 +121,11 @@ export class CodexAssistantProjection {
       this.emitCommentaryProgress({ itemId, text, phase: "update" });
       return;
     }
-    const knownFinalAnswer = this.isFinalAnswerAssistantItem(itemId);
+    const phase = this.assistantPhaseByItem.get(itemId);
+    const knownStableAnswer = phase === "partial_answer" || phase === "final_answer";
     const { occurrenceId, replacement, replaceable } = this.steeringSegments.recordStream(
       itemId,
-      knownFinalAnswer,
+      knownStableAnswer,
     );
     let prepared = this.preparedStreams.get(itemId);
     if (!prepared) {
@@ -135,7 +134,7 @@ export class CodexAssistantProjection {
     }
     const preparedDelta = prepared.accumulator.consume(delta, { final })?.text ?? "";
     prepared.text += preparedDelta;
-    if (knownFinalAnswer) {
+    if (phase === "final_answer") {
       this.emitAnswerCandidate(itemId, "candidate");
     }
     if (!preparedDelta && !replacement) {
@@ -157,7 +156,7 @@ export class CodexAssistantProjection {
     });
     // Legacy channel preview callbacks are append-oriented and do not all
     // understand replacement snapshots.
-    if (knownFinalAnswer && !replaceable) {
+    if (knownStableAnswer && !replaceable) {
       await this.params.onPartialReply?.(streamPayload);
     }
   }
@@ -262,14 +261,17 @@ export class CodexAssistantProjection {
     return undefined;
   }
 
-  handleRawResponseItemCompleted(item: JsonObject, activeItemIds: ReadonlySet<string>): void {
-    const role = readString(item, "role");
+  handleRawResponseItemCompleted(
+    item: JsonObject,
+    activeItemIds: ReadonlySet<string>,
+    text: string | undefined,
+  ): void {
     const phase = readString(item, "phase");
     const rawItemId = readString(item, "id");
     const candidateWasSupersededBeforeRaw = this.latestTerminalAssistantCandidateSuperseded;
     const pendingTerminalAssistantEchoItemId = this.pendingRawTerminalAssistantEchoItemId;
     const isPendingTerminalAssistantEcho =
-      role === "assistant" &&
+      item.role === "assistant" &&
       phase !== "commentary" &&
       pendingTerminalAssistantEchoItemId !== undefined &&
       (rawItemId === undefined || rawItemId === pendingTerminalAssistantEchoItemId);
@@ -279,7 +281,7 @@ export class CodexAssistantProjection {
     if (!isPendingTerminalAssistantEcho) {
       this.markTerminalAssistantCandidateSupersededBy(rawItemId);
     }
-    if (role !== "assistant" || this.suppressItem(rawItemId)) {
+    if (item.role !== "assistant" || this.suppressItem(rawItemId)) {
       return;
     }
     if (phase === "commentary" && this.pendingRawCommentaryEchoes > 0) {
@@ -291,7 +293,6 @@ export class CodexAssistantProjection {
       // Contributors may rewrite or erase typed text without changing its raw echo.
       return;
     }
-    const text = extractRawResponseItemText(item);
     if (
       text === undefined ||
       (!text &&
@@ -303,7 +304,6 @@ export class CodexAssistantProjection {
     }
     const itemId = rawItemId ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
     const isIdlessTerminalAssistantAfterCompletedWork =
-      candidateWasSupersededBeforeRaw &&
       rawItemId === undefined &&
       pendingTerminalAssistantEchoItemId === undefined &&
       activeItemIds.size === 0;
@@ -410,6 +410,7 @@ export class CodexAssistantProjection {
     if (prefix.completed) {
       const index = this.assistantItemOrder.indexOf(prefix.itemId);
       this.persistableAssistantBarrier = Math.max(this.persistableAssistantBarrier, index + 1);
+      this.persistedAssistantBarrier = Math.max(this.persistedAssistantBarrier, index + 1);
     }
     this.persistedAssistantBoundary = true;
   }
@@ -697,15 +698,15 @@ export class CodexAssistantProjection {
   private collectPersistableAssistantTexts(minIndex: number): string[] {
     let texts: string[] = [];
     let replaceable = false;
-    // Walk time order. Unphased text replaces the current segment. Explicit
-    // finals accumulate unless they follow a replacement. Native item identity,
+    // Walk time order. Unphased text replaces the current segment. Stable partial
+    // and final answers accumulate unless they follow a replacement. Native item identity,
     // not text content, determines which answer survives.
-    for (let index = 0; index < this.assistantItemOrder.length; index += 1) {
-      const itemId = this.assistantItemOrder[index];
+    for (const [index, itemId] of this.assistantItemOrder.entries()) {
+      const phase = this.assistantPhaseByItem.get(itemId);
+      const cutoff = phase === "partial_answer" ? this.persistedAssistantBarrier : minIndex;
       if (
-        !itemId ||
         this.isNonTerminalAssistantItem(itemId) ||
-        (index < minIndex && !this.steeringSegments.survivesHandoff(itemId))
+        (index < cutoff && !this.steeringSegments.survivesHandoff(itemId))
       ) {
         continue;
       }
@@ -713,10 +714,10 @@ export class CodexAssistantProjection {
       if (!text?.trim() || this.isToolProgressEchoText(itemId, text.trim())) {
         continue;
       }
-      const isTerminalFinal = this.assistantPhaseByItem.get(itemId) === "final_answer";
-      if (!isTerminalFinal || replaceable) {
+      const isStableAnswer = phase === "partial_answer" || phase === "final_answer";
+      if (!isStableAnswer || replaceable) {
         texts = [text];
-        replaceable = !isTerminalFinal;
+        replaceable = !isStableAnswer;
         continue;
       }
       texts.push(text);

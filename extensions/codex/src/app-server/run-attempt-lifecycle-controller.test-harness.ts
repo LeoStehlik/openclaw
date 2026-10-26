@@ -66,6 +66,15 @@ export function createTerminalReleaseHarness(options?: {
     order.push("cancel");
     steeringQueue.cancel();
   });
+  const sealAdmission = vi.fn(() => steeringQueue.sealAdmission());
+  const drainBeforeCancel = vi.fn(() => {
+    const drain = steeringQueue.drainBeforeCancel();
+    if (drain) {
+      return drain.then(() => cancel());
+    }
+    cancel();
+    return undefined;
+  });
   const resources = {
     prompt: {
       turnState: { codexTurnPromptText: "test" },
@@ -100,7 +109,7 @@ export function createTerminalReleaseHarness(options?: {
     deadlines: { beginSettlement: vi.fn() },
     activeTurnItemIds,
     pendingOpenClawDynamicToolCompletionIds,
-    steeringQueueRef: { current: { ...steeringQueue, cancel } },
+    steeringQueueRef: { current: { ...steeringQueue, cancel, sealAdmission, drainBeforeCancel } },
     interruptTurn: (turnId: string) =>
       interruptCodexTurnAndWaitBestEffort(client as never, {
         threadId: "thread-1",
@@ -152,6 +161,7 @@ export function createTerminalReleaseHarness(options?: {
     },
     activeTurnItemIds,
     steeringQueue,
+    sealAdmission,
     cancel,
     sourceReplies,
     completeTurn,

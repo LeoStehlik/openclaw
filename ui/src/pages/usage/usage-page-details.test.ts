@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import * as downloads from "../../lib/download.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -415,7 +415,7 @@ describe("UsagePage detail requests", () => {
         "agent:main:second",
       ]);
     second.reject(new Error("Selected timeline unavailable"));
-    await waitForFast(() => expect(page.read().detail.timeSeriesLoading).toBe(false));
+    await page.read().detail.timeSeriesRead;
     first.reject(new Error("Retired timeline unavailable"));
     await first.promise.catch(() => {});
     expect(usageCalls(request, "sessions.usage.timeseries")).toHaveLength(2);
